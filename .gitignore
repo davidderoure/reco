@@ -1,0 +1,20 @@
+# Generated gRPC bindings
+generated/recommender_pb2.py
+generated/recommender_pb2_grpc.py
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+dist/
+build/
+
+# Environment
+.env
+
+# Test artefacts
+.coverage
+htmlcov/
+.pytest_cache/

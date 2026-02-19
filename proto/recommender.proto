@@ -1,0 +1,121 @@
+syntax = "proto3";
+
+package recommender;
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/empty.proto";
+
+// -------------------------------------------------------
+// Service 1: Python acts as gRPC SERVER
+//   C# client calls these methods on the Python server.
+// -------------------------------------------------------
+service RecommenderService {
+  // Fire-and-forget event notifications (C# → Python)
+  rpc UserViewedStory(UserViewedStoryRequest) returns (google.protobuf.Empty);
+  rpc UserCompletedStory(UserCompletedStoryRequest) returns (google.protobuf.Empty);
+  rpc UserAnsweredQuestion(UserAnsweredQuestionRequest) returns (google.protobuf.Empty);
+  rpc UserProvidedMood(UserProvidedMoodRequest) returns (google.protobuf.Empty);
+
+  // Request/response: returns 6 recommendations within 500ms
+  rpc GetRecommendations(GetRecommendationsRequest) returns (GetRecommendationsResponse);
+}
+
+// -------------------------------------------------------
+// Service 2: Python acts as gRPC CLIENT
+//   Python calls these methods on the C# server.
+// -------------------------------------------------------
+service StoryService {
+  rpc GetStoryCatalogue(GetStoryCatalogueRequest) returns (GetStoryCatalogueResponse);
+  rpc SaveUserState(SaveUserStateRequest) returns (google.protobuf.Empty);
+  rpc LoadUserState(LoadUserStateRequest) returns (LoadUserStateResponse);
+}
+
+// -------------------------------------------------------
+// Event request messages (C# → Python)
+// -------------------------------------------------------
+
+message UserViewedStoryRequest {
+  string user_id = 1;
+  string story_id = 2;
+  google.protobuf.Timestamp timestamp = 3;
+}
+
+message UserCompletedStoryRequest {
+  string user_id = 1;
+  string story_id = 2;
+  google.protobuf.Timestamp timestamp = 3;
+}
+
+message UserAnsweredQuestionRequest {
+  string user_id = 1;
+  string story_id = 2;
+  int32 score = 3;  // 1–5: end-of-story satisfaction rating
+  google.protobuf.Timestamp timestamp = 4;
+}
+
+message UserProvidedMoodRequest {
+  string user_id = 1;
+  int32 mood_score = 2;  // 1–5: current user mood
+  google.protobuf.Timestamp timestamp = 3;
+}
+
+// -------------------------------------------------------
+// Recommendation request/response
+// -------------------------------------------------------
+
+message GetRecommendationsRequest {
+  string user_id = 1;
+}
+
+message GetRecommendationsResponse {
+  // Exactly 6 story IDs, in random order.
+  // Breakdown: 2 content-based, 2 collaborative, 1 topical, 1 wildcard.
+  repeated string story_ids = 1;
+}
+
+// -------------------------------------------------------
+// Story catalogue messages (Python → C#)
+// -------------------------------------------------------
+
+message GetStoryCatalogueRequest {
+  // Empty: always returns the full catalogue.
+}
+
+message StoryMessage {
+  string story_id = 1;
+  string title = 2;
+  repeated string themes = 3;  // broad category labels, e.g. "adventure"
+  repeated string tags = 4;    // fine-grained content tags, e.g. "pirates"
+}
+
+message GetStoryCatalogueResponse {
+  repeated StoryMessage stories = 1;
+}
+
+// -------------------------------------------------------
+// User state persistence messages (Python ↔ C#)
+// -------------------------------------------------------
+
+message UserEventMessage {
+  string event_type = 1;                // "viewed" | "completed" | "scored" | "mood"
+  string story_id = 2;                  // empty for mood events
+  int32 score = 3;                      // 1–5 for scored/mood events; 0 otherwise
+  google.protobuf.Timestamp timestamp = 4;
+}
+
+message UserStateMessage {
+  string user_id = 1;
+  repeated UserEventMessage events = 2; // full chronological event log
+}
+
+message SaveUserStateRequest {
+  repeated UserStateMessage user_states = 1;
+}
+
+message LoadUserStateRequest {
+  repeated string user_ids = 1;  // empty list = load all users
+}
+
+message LoadUserStateResponse {
+  repeated UserStateMessage user_states = 1;
+}
