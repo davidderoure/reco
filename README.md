@@ -49,7 +49,8 @@ recommender/
   engine.py               RecommendationEngine — orchestrates 6 slots
   service.py              RecommenderServicer — gRPC servicer
   strategies/             Four strategy implementations
-main.py                   Entry point
+main.py                   Entry point — real recommender service
+mock_server.py            Mock C# backend + browser test UI (see below)
 config.py                 Environment-variable configuration
 tests/                    pytest test suite (157 tests)
 ```
@@ -69,12 +70,54 @@ cp .env.example .env
 
 ## Running
 
-```bash
-# Start the recommender server (requires a running C# server)
-python main.py
+### With the mock server (no C# required)
 
-# Or with explicit config
-CSHARP_SERVER_ADDRESS=localhost:50052 GRPC_SERVER_PORT=50051 python main.py
+`mock_server.py` stands in for the C# backend and provides a browser UI for
+interactive testing. Start both processes in separate terminals:
+
+**Terminal 1 — mock backend + web UI:**
+```bash
+python mock_server.py
+```
+
+**Terminal 2 — recommender:**
+```bash
+python main.py
+```
+
+Then open **http://localhost:8080** in a browser.
+
+| Port | Process | Role |
+|---|---|---|
+| `50052` | `mock_server.py` | StoryService gRPC (acts as C# backend) |
+| `50051` | `main.py` | RecommenderService gRPC |
+| `8080` | `mock_server.py` | Browser test UI |
+
+#### Browser UI panels
+
+| Panel | Description |
+|---|---|
+| **Story Catalogue** | 15 sample stories — click View, Complete, Score or Mood to fire events |
+| **Recommendations** | 6 recommended stories returned by the engine after clicking "Get Recommendations" |
+| **Preference Weights** | Live bar chart of theme/tag weights, updated after every interaction |
+| **Event Log** | Timestamped record of every event fired for the selected user |
+
+Use the user selector (alice, bob, charlie, diana, test_user, or a custom ID) to
+switch between users and observe how different interaction histories produce
+different recommendations, and how the collaborative strategy responds once
+multiple users have built up histories.
+
+If you get `OSError: [Errno 48] Address already in use`, a previous process is
+still holding a port. Free it with:
+```bash
+kill $(lsof -ti :8080 -ti :50052) 2>/dev/null
+```
+
+### With a real C# server
+
+```bash
+# Start the recommender (points at your C# server)
+CSHARP_SERVER_ADDRESS=<host>:50052 python main.py
 ```
 
 ## Testing
