@@ -943,6 +943,7 @@ header select, header input[type=text] {
          style="display:none;width:130px">
   <button class="btn primary" onclick="getRecommendations()">&#10024; Get Recommendations</button>
   <button class="btn" onclick="loadState()">&#8635; Refresh State</button>
+  <button class="btn" onclick="promptMood()">&#128149; Mood</button>
   <span id="status-bar" class="status-bar"></span>
   <span id="recommender-status">&#9679; Checking recommender&hellip;</span>
 </header>
