@@ -41,7 +41,11 @@ Every interaction updates a per-user theme/tag weight vector:
 | Viewed | +1.0 |
 | Completed | +2.0 (additive with viewed) |
 | Scored 1–5 | `(score − 3) × 0.5` |
+| Read ≥ 50% | +1.0 (same as viewed; applied once, idempotent) |
+| Read < 50% | no weight impact; progress recorded only |
 | Mood 1–5 | stored only, no weight impact |
+
+The read-progress threshold (50%) is defined by `READ_VIEWED_THRESHOLD_PERCENT` in `user_state.py`.
 
 ### State persistence
 
@@ -64,7 +68,7 @@ recommender/
 main.py                   Entry point — real recommender service
 mock_server.py            Mock C# backend + browser test UI (see below)
 config.py                 Environment-variable configuration
-tests/                    pytest test suite (164 tests)
+tests/                    pytest test suite (179 tests)
 ```
 
 ## Setup
@@ -109,7 +113,7 @@ Then open **http://localhost:8080** in a browser.
 
 | Panel | Description |
 |---|---|
-| **Story Catalogue** | 15 sample stories — click View, Complete, Score or Mood to fire events |
+| **Story Catalogue** | 27 sample Oxford museum stories — click View, Complete, Score, Mood, or Read% to fire events |
 | **Recommendations** | 6 recommended stories returned by the engine after clicking "Get Recommendations" |
 | **Preference Weights** | Live bar chart of theme/tag weights, updated after every interaction |
 | **Event Log** | Timestamped record of every event fired for the selected user |
@@ -159,11 +163,14 @@ All settings are driven by environment variables. See `.env.example` for the ful
 
 ### RecommenderService (Python as server — C# calls these)
 
+All requests carry `user_id` (string) and `timestamp` (UTC). There is no concept of a user session; state is saved periodically by a background thread.
+
 ```protobuf
 rpc UserViewedStory(...)       returns (Empty);   // fire-and-forget
 rpc UserCompletedStory(...)    returns (Empty);   // fire-and-forget
 rpc UserAnsweredQuestion(...)  returns (Empty);   // fire-and-forget (score 1–5)
-rpc UserProvidedMood(...)      returns (Empty);   // fire-and-forget (mood 1–5)
+rpc UserProvidedMood(...)      returns (Empty);   // fire-and-forget (mood_score 1–5)
+rpc UserReadStory(...)         returns (Empty);   // fire-and-forget (read_percent 0–100)
 rpc GetRecommendations(...)    returns (GetRecommendationsResponse);  // ≤500ms
 ```
 
@@ -174,6 +181,8 @@ rpc GetStoryCatalogue(...)  returns (GetStoryCatalogueResponse);
 rpc SaveUserModel(...)      returns (Empty);
 rpc LoadUserModel(...)      returns (LoadUserModelResponse);
 ```
+
+`StoryMessage` carries `story_id`, `title`, `themes` (exactly one per story), `tags` (free-text), and `authors` (display names of the story's author(s)).
 
 Full message definitions are in [`proto/recommender.proto`](proto/recommender.proto).
 

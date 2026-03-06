@@ -49,7 +49,7 @@ GRPC_MAX_WORKERS: int = 10
 logger = logging.getLogger("mock_server")
 
 # ---------------------------------------------------------------------------
-# Static story catalogue — 15 stories, 6 themes, 18 tags
+# Static story catalogue — 27 stories, 10 themes
 # ---------------------------------------------------------------------------
 
 SAMPLE_STORIES: list[dict[str, Any]] = [
