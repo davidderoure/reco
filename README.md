@@ -13,9 +13,9 @@ C# App Server ──gRPC──► Python Recommender (this repo)
 
 **Python acts as a gRPC server** — the C# client sends user events and recommendation requests to Python.
 
-**Python also acts as a gRPC client** — it calls back to C# to fetch the story catalogue and persist/load user state as event logs.
+**Python also acts as a gRPC client** — it calls back to C# to fetch the story catalogue and persist/load user state.
 
-### Recommendation slots (6 total, returned in random order)
+### Recommendation slots (6 total)
 
 | # | Strategy | Algorithm |
 |---|---|---|
@@ -23,6 +23,14 @@ C# App Server ──gRPC──► Python Recommender (this repo)
 | 2 | Collaborative filtering | User-user cosine similarity; aggregate stories from top-20 similar users |
 | 1 | Topical | User's highest-weight tag → best matching unviewed stories |
 | 1 | Wildcard | Random, preferring stories in unexplored themes |
+
+#### Slot stability
+
+Stories from the previous recommendation set that the user has not yet viewed or completed stay in the same list position on the next request. Only slots freed by user actions are replaced with fresh picks. This means the UI stays consistent between refreshes — stories don't jump around unless the user has acted on them.
+
+#### Progressive coverage
+
+When filling an open slot the engine first looks for stories it has never recommended to that user. This guarantees that a user who consistently acts on recommendations will eventually be offered every story in the catalogue. Previously-recommended stories are only repeated once all novel candidates are exhausted.
 
 ### User preference model
 
@@ -35,7 +43,11 @@ Every interaction updates a per-user theme/tag weight vector:
 | Scored 1–5 | `(score − 3) × 0.5` |
 | Mood 1–5 | stored only, no weight impact |
 
-State is persisted to the C# server as a raw event log and replayed on startup.
+### State persistence
+
+User state is persisted to the C# server as a compact **user model** — the already-computed derived state — rather than a raw event log. This keeps the payload size bounded by the size of the story catalogue vocabulary regardless of how many interactions a user has had, making startup and periodic saves scalable to large numbers of users.
+
+The persisted model includes: theme/tag weights, viewed/completed/scored story sets, recent mood scores, the last recommendation set (for slot stability), and the set of all stories ever recommended (for progressive coverage).
 
 ## Project Structure
 
@@ -52,7 +64,7 @@ recommender/
 main.py                   Entry point — real recommender service
 mock_server.py            Mock C# backend + browser test UI (see below)
 config.py                 Environment-variable configuration
-tests/                    pytest test suite (157 tests)
+tests/                    pytest test suite (164 tests)
 ```
 
 ## Setup
@@ -159,8 +171,8 @@ rpc GetRecommendations(...)    returns (GetRecommendationsResponse);  // ≤500m
 
 ```protobuf
 rpc GetStoryCatalogue(...)  returns (GetStoryCatalogueResponse);
-rpc SaveUserState(...)      returns (Empty);
-rpc LoadUserState(...)      returns (LoadUserStateResponse);
+rpc SaveUserModel(...)      returns (Empty);
+rpc LoadUserModel(...)      returns (LoadUserModelResponse);
 ```
 
 Full message definitions are in [`proto/recommender.proto`](proto/recommender.proto).
