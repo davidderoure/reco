@@ -15,6 +15,7 @@ service RecommenderService {
   rpc UserCompletedStory(UserCompletedStoryRequest) returns (google.protobuf.Empty);
   rpc UserAnsweredQuestion(UserAnsweredQuestionRequest) returns (google.protobuf.Empty);
   rpc UserProvidedMood(UserProvidedMoodRequest) returns (google.protobuf.Empty);
+  rpc UserReadStory(UserReadStoryRequest) returns (google.protobuf.Empty);
 
   // Request/response: returns 6 recommendations within 500ms
   rpc GetRecommendations(GetRecommendationsRequest) returns (GetRecommendationsResponse);
@@ -59,12 +60,20 @@ message UserProvidedMoodRequest {
   google.protobuf.Timestamp timestamp = 3;
 }
 
+message UserReadStoryRequest {
+  string user_id      = 1;
+  string story_id     = 2;
+  int32  read_percent = 3;  // 0–100: percentage of the story read so far
+  google.protobuf.Timestamp timestamp = 4;
+}
+
 // -------------------------------------------------------
 // Recommendation request/response
 // -------------------------------------------------------
 
 message GetRecommendationsRequest {
   string user_id = 1;
+  google.protobuf.Timestamp timestamp = 2;
 }
 
 message GetRecommendationsResponse {

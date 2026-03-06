@@ -15,6 +15,7 @@ from recommender.catalogue import StoryCatalogue
 from recommender.models import Story, UserProfile
 from recommender.user_state import (
     MOOD_HISTORY_LIMIT,
+    READ_VIEWED_THRESHOLD_PERCENT,
     UserStateStore,
     _datetime_to_timestamp,
     _timestamp_to_datetime,
@@ -203,6 +204,73 @@ class TestRecordMood:
             store.record_mood("u1", (i % 5) + 1, TS)
         profile = store.get_or_create_profile("u1")
         assert len(profile.mood_scores) == MOOD_HISTORY_LIMIT
+
+
+# ---------------------------------------------------------------------------
+# Read progress tests
+# ---------------------------------------------------------------------------
+
+
+class TestRecordReadProgress:
+    def test_below_threshold_does_not_mark_viewed(self) -> None:
+        store = _make_store(STORY_ADV)
+        store.record_read_progress("u1", "s1", READ_VIEWED_THRESHOLD_PERCENT - 1, TS)
+        profile = store.get_or_create_profile("u1")
+        assert "s1" not in profile.viewed_story_ids
+        assert profile.theme_weights == {}
+
+    def test_at_threshold_marks_viewed(self) -> None:
+        store = _make_store(STORY_ADV)
+        store.record_read_progress("u1", "s1", READ_VIEWED_THRESHOLD_PERCENT, TS)
+        profile = store.get_or_create_profile("u1")
+        assert "s1" in profile.viewed_story_ids
+        assert profile.theme_weights["adventure"] == pytest.approx(_WEIGHT_VIEW)
+
+    def test_above_threshold_marks_viewed(self) -> None:
+        store = _make_store(STORY_ADV)
+        store.record_read_progress("u1", "s1", 100, TS)
+        profile = store.get_or_create_profile("u1")
+        assert "s1" in profile.viewed_story_ids
+        assert profile.theme_weights["adventure"] == pytest.approx(_WEIGHT_VIEW)
+
+    def test_idempotent_above_threshold(self) -> None:
+        """Second call above threshold does not double-apply the view weight."""
+        store = _make_store(STORY_ADV)
+        store.record_read_progress("u1", "s1", 75, TS)
+        store.record_read_progress("u1", "s1", 90, TS)
+        profile = store.get_or_create_profile("u1")
+        assert profile.theme_weights["adventure"] == pytest.approx(_WEIGHT_VIEW)
+
+    def test_already_viewed_not_double_counted(self) -> None:
+        """Story already in viewed_story_ids gets no extra weight delta."""
+        store = _make_store(STORY_ADV)
+        store.record_viewed("u1", "s1", TS)
+        weight_before = store.get_or_create_profile("u1").theme_weights["adventure"]
+        store.record_read_progress("u1", "s1", 100, TS)
+        profile = store.get_or_create_profile("u1")
+        assert profile.theme_weights["adventure"] == pytest.approx(weight_before)
+
+    def test_invalid_read_percent_raises(self) -> None:
+        store = _make_store()
+        with pytest.raises(ValueError):
+            store.record_read_progress("u1", "s1", -1, TS)
+        with pytest.raises(ValueError):
+            store.record_read_progress("u1", "s1", 101, TS)
+
+    def test_unknown_story_above_threshold_does_not_crash(self) -> None:
+        """Unknown story is marked viewed but no weight delta can be applied."""
+        store = _make_store()
+        store.record_read_progress("u1", "unknown_story", 75, TS)
+        profile = store.get_or_create_profile("u1")
+        assert "unknown_story" in profile.viewed_story_ids
+        assert profile.theme_weights == {}
+
+    def test_tags_receive_weight_at_threshold(self) -> None:
+        store = _make_store(STORY_ADV)
+        store.record_read_progress("u1", "s1", READ_VIEWED_THRESHOLD_PERCENT, TS)
+        profile = store.get_or_create_profile("u1")
+        assert profile.tag_weights["pirates"] == pytest.approx(_WEIGHT_VIEW)
+        assert profile.tag_weights["ocean"] == pytest.approx(_WEIGHT_VIEW)
 
 
 # ---------------------------------------------------------------------------

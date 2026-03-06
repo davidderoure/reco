@@ -147,6 +147,43 @@ class RecommenderServicer:
             context.set_details("Internal error recording mood event.")
         return Empty()
 
+    def UserReadStory(self, request: Any, context: Any) -> Any:
+        """Record how far through a story the user has read.
+
+        When ``read_percent`` reaches the configured threshold the story is
+        treated as viewed: its themes/tags receive the standard view weight
+        delta and it is added to the user's viewed set.  Events below the
+        threshold are recorded as analytics but do not affect recommendations.
+        Repeated above-threshold events for the same story are idempotent.
+
+        Args:
+            request: ``UserReadStoryRequest`` proto message.
+            context: gRPC service context.
+
+        Returns:
+            ``google.protobuf.Empty``.
+        """
+        from google.protobuf.empty_pb2 import Empty
+
+        ts = _proto_ts_to_datetime(request.timestamp)
+        try:
+            self._store.record_read_progress(
+                request.user_id, request.story_id, request.read_percent, ts
+            )
+        except ValueError as exc:
+            context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
+            context.set_details(str(exc))
+        except Exception:
+            logger.exception(
+                "Error recording read progress for user=%r story=%r percent=%r",
+                request.user_id,
+                request.story_id,
+                request.read_percent,
+            )
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details("Internal error recording read progress.")
+        return Empty()
+
     # ------------------------------------------------------------------
     # Recommendation request
     # ------------------------------------------------------------------
@@ -167,6 +204,13 @@ class RecommenderServicer:
             context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
             context.set_details("user_id must be non-empty")
             return recommender_pb2.GetRecommendationsResponse()
+
+        ts = _proto_ts_to_datetime(request.timestamp)
+        logger.debug(
+            "GetRecommendations user=%r requested_at=%s",
+            request.user_id,
+            ts.isoformat(),
+        )
 
         start_ms = time.monotonic() * 1000
         try:

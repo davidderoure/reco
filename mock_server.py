@@ -338,7 +338,7 @@ def grpc_get_recommendations(user_id: str) -> tuple[list[str], str | None]:
     """Call GetRecommendations → (story_ids, error_message | None)."""
     try:
         resp = _get_recommender_stub().GetRecommendations(
-            recommender_pb2.GetRecommendationsRequest(user_id=user_id),
+            recommender_pb2.GetRecommendationsRequest(user_id=user_id, timestamp=_now_ts()),
             timeout=3.0,
         )
         return list(resp.story_ids), None
@@ -380,6 +380,13 @@ def grpc_send_event(
             stub.UserProvidedMood(
                 recommender_pb2.UserProvidedMoodRequest(
                     user_id=user_id, mood_score=score, timestamp=ts
+                ),
+                timeout=3.0,
+            )
+        elif event_type == "read_progress":
+            stub.UserReadStory(
+                recommender_pb2.UserReadStoryRequest(
+                    user_id=user_id, story_id=story_id, read_percent=score, timestamp=ts
                 ),
                 timeout=3.0,
             )
@@ -515,7 +522,10 @@ class MockServerHTTPHandler(BaseHTTPRequestHandler):
         if event_type == "mood" and not 1 <= score <= 5:
             _send_error(self, "score 1-5 required for mood")
             return
-        if event_type not in ("viewed", "completed", "scored", "mood"):
+        if event_type == "read_progress" and (not story_id or not 0 <= score <= 100):
+            _send_error(self, "story_id and score 0-100 required for read_progress")
+            return
+        if event_type not in ("viewed", "completed", "scored", "mood", "read_progress"):
             _send_error(self, f"Unknown event type: {event_type!r}")
             return
 

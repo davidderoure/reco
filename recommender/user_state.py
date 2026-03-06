@@ -22,6 +22,12 @@ _WEIGHT_SCORE_FACTOR = 0.5   # (score - 3) * factor
 # Mood does not affect recommendation weights, so only recent history is useful.
 MOOD_HISTORY_LIMIT = 50
 
+# A read-progress event whose read_percent meets or exceeds this threshold is
+# treated as a "viewed" event: the story receives the standard view weight delta
+# and is added to viewed_story_ids.  Repeated events above the threshold are
+# idempotent — the weight is only applied once.
+READ_VIEWED_THRESHOLD_PERCENT = 50
+
 
 class UserStateStore:
     """Thread-safe in-memory store for all user profiles.
@@ -244,6 +250,43 @@ class UserStateStore:
             if story:
                 delta = (score - 3) * _WEIGHT_SCORE_FACTOR
                 self._apply_weight_delta(profile, story, delta)
+
+    def record_read_progress(
+        self, user_id: str, story_id: str, read_percent: int, timestamp: datetime
+    ) -> None:
+        """Record how far through a story the user has read.
+
+        If *read_percent* is at or above :data:`READ_VIEWED_THRESHOLD_PERCENT`
+        and the story has not already been recorded as viewed, the standard
+        view weight delta is applied and the story is added to
+        :attr:`~recommender.models.UserProfile.viewed_story_ids`.  Repeated
+        calls above the threshold are idempotent — weights are only applied
+        once.  Events below the threshold are a no-op for the recommendation
+        engine.
+
+        Args:
+            user_id: The user.
+            story_id: The story being read.
+            read_percent: Integer in [0, 100] — percentage of the story read.
+            timestamp: When the event occurred.
+
+        Raises:
+            ValueError: If *read_percent* is outside [0, 100].
+        """
+        if not 0 <= read_percent <= 100:
+            raise ValueError(
+                f"read_percent must be between 0 and 100, got {read_percent!r}"
+            )
+        with self._lock:
+            profile = self.get_or_create_profile(user_id)
+            if (
+                read_percent >= READ_VIEWED_THRESHOLD_PERCENT
+                and story_id not in profile.viewed_story_ids
+            ):
+                profile.viewed_story_ids.add(story_id)
+                story = self._catalogue.get_story(story_id)
+                if story:
+                    self._apply_weight_delta(profile, story, _WEIGHT_VIEW)
 
     def record_mood(self, user_id: str, mood_score: int, timestamp: datetime) -> None:
         """Record the user's current mood score.

@@ -169,7 +169,7 @@ class TestUserProvidedMood:
 class TestGetRecommendations:
     def test_returns_six_story_ids(self) -> None:
         servicer = _make_servicer(recommendations=["s1", "s2", "s3", "s4", "s5", "s6"])
-        request = MagicMock(user_id="u1")
+        request = MagicMock(user_id="u1", timestamp=_make_ts())
         response = servicer.GetRecommendations(request, _make_context())
         assert list(response.story_ids) == ["s1", "s2", "s3", "s4", "s5", "s6"]
 
@@ -182,14 +182,14 @@ class TestGetRecommendations:
 
     def test_engine_value_error_sets_invalid_argument(self) -> None:
         servicer = _make_servicer(engine_raises=ValueError("bad user"))
-        request = MagicMock(user_id="u1")
+        request = MagicMock(user_id="u1", timestamp=_make_ts())
         ctx = _make_context()
         servicer.GetRecommendations(request, ctx)
         ctx.set_code.assert_called_with(grpc.StatusCode.INVALID_ARGUMENT)
 
     def test_engine_runtime_error_sets_internal(self) -> None:
         servicer = _make_servicer(engine_raises=RuntimeError("crash"))
-        request = MagicMock(user_id="u1")
+        request = MagicMock(user_id="u1", timestamp=_make_ts())
         ctx = _make_context()
         servicer.GetRecommendations(request, ctx)
         ctx.set_code.assert_called_with(grpc.StatusCode.INTERNAL)
@@ -208,15 +208,99 @@ class TestGetRecommendations:
 
         with patch("recommender.service._RECOMMENDATION_WARN_THRESHOLD_MS", 0):
             with patch("recommender.service.logger") as mock_logger:
-                request = MagicMock(user_id="u1")
+                request = MagicMock(user_id="u1", timestamp=_make_ts())
                 servicer.GetRecommendations(request, _make_context())
                 mock_logger.warning.assert_called_once()
 
     def test_calls_engine_with_user_id(self) -> None:
         servicer = _make_servicer()
-        request = MagicMock(user_id="u42")
+        request = MagicMock(user_id="u42", timestamp=_make_ts())
         servicer.GetRecommendations(request, _make_context())
         servicer._engine.get_recommendations.assert_called_once_with("u42")
+
+    def test_timestamp_is_extracted(self) -> None:
+        """Verify the handler parses the timestamp without error."""
+        dt = datetime(2024, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
+        servicer = _make_servicer()
+        request = MagicMock(user_id="u1", timestamp=_make_ts(dt))
+        # Should complete without raising despite timestamp being present
+        response = servicer.GetRecommendations(request, _make_context())
+        assert response is not None
+
+
+# ---------------------------------------------------------------------------
+# UserReadStory tests
+# ---------------------------------------------------------------------------
+
+
+class TestUserReadStory:
+    def test_dispatches_to_store(self) -> None:
+        servicer = _make_servicer()
+        request = MagicMock(
+            user_id="u1", story_id="s1", read_percent=75, timestamp=_make_ts()
+        )
+        ctx = _make_context()
+        servicer.UserReadStory(request, ctx)
+        servicer._store.record_read_progress.assert_called_once()
+        call_args = servicer._store.record_read_progress.call_args[0]
+        assert call_args[0] == "u1"
+        assert call_args[1] == "s1"
+        assert call_args[2] == 75
+        assert isinstance(call_args[3], datetime)
+
+    def test_returns_empty(self) -> None:
+        from google.protobuf.empty_pb2 import Empty
+
+        servicer = _make_servicer()
+        request = MagicMock(
+            user_id="u1", story_id="s1", read_percent=75, timestamp=_make_ts()
+        )
+        result = servicer.UserReadStory(request, _make_context())
+        assert isinstance(result, Empty)
+
+    def test_invalid_read_percent_sets_invalid_argument(self) -> None:
+        servicer = _make_servicer()
+        servicer._store.record_read_progress.side_effect = ValueError("out of range")
+        request = MagicMock(
+            user_id="u1", story_id="s1", read_percent=101, timestamp=_make_ts()
+        )
+        ctx = _make_context()
+        servicer.UserReadStory(request, ctx)
+        ctx.set_code.assert_called_with(grpc.StatusCode.INVALID_ARGUMENT)
+
+    def test_internal_error_sets_internal_status(self) -> None:
+        servicer = _make_servicer()
+        servicer._store.record_read_progress.side_effect = RuntimeError("crash")
+        request = MagicMock(
+            user_id="u1", story_id="s1", read_percent=50, timestamp=_make_ts()
+        )
+        ctx = _make_context()
+        servicer.UserReadStory(request, ctx)
+        ctx.set_code.assert_called_with(grpc.StatusCode.INTERNAL)
+
+    def test_timestamp_extracted(self) -> None:
+        """Verify the timestamp is parsed and forwarded to the store."""
+        dt = datetime(2024, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
+        servicer = _make_servicer()
+        request = MagicMock(
+            user_id="u1", story_id="s1", read_percent=60, timestamp=_make_ts(dt)
+        )
+        ctx = _make_context()
+        servicer.UserReadStory(request, ctx)
+        call_args = servicer._store.record_read_progress.call_args[0]
+        assert isinstance(call_args[3], datetime)
+        assert call_args[3].tzinfo is not None
+
+    def test_below_threshold_percent_still_dispatches(self) -> None:
+        """Service layer does not filter on threshold — store handles that."""
+        servicer = _make_servicer()
+        request = MagicMock(
+            user_id="u1", story_id="s1", read_percent=10, timestamp=_make_ts()
+        )
+        ctx = _make_context()
+        servicer.UserReadStory(request, ctx)
+        servicer._store.record_read_progress.assert_called_once()
+        assert servicer._store.record_read_progress.call_args[0][2] == 10
 
 
 # ---------------------------------------------------------------------------
