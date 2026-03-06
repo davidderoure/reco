@@ -23,16 +23,19 @@ class Story:
     Attributes:
         story_id: Unique identifier for the story.
         title: Human-readable story title.
-        themes: Broad category labels (e.g. ``"adventure"``, ``"mystery"``).
-            A story belongs to one or more of ~10 themes.
-        tags: Fine-grained content tags (e.g. ``"pirates"``, ``"treasure"``).
+        themes: Broad category labels (e.g. ``"craft"``, ``"discovery"``).
+            Each story belongs to exactly one theme.
+        tags: Fine-grained content tags (e.g. ``"goldsmith"``, ``"9th-century"``).
             Used for topical recommendations.
+        authors: Display names of the story's author(s). Defaults to an
+            empty list for backwards compatibility.
     """
 
     story_id: str
     title: str
     themes: list[str]
     tags: list[str]
+    authors: list[str] = field(default_factory=list)
 
 
 @dataclass

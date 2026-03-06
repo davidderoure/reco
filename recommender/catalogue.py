@@ -59,6 +59,7 @@ class StoryCatalogue:
                     title=msg.title,
                     themes=list(msg.themes),
                     tags=list(msg.tags),
+                    authors=list(msg.authors),
                 )
             with self._lock:
                 self._stories = new_stories

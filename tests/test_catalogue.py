@@ -15,13 +15,20 @@ from recommender.models import Story
 # ---------------------------------------------------------------------------
 
 
-def _make_story_msg(story_id: str, title: str, themes: list[str], tags: list[str]):
+def _make_story_msg(
+    story_id: str,
+    title: str,
+    themes: list[str],
+    tags: list[str],
+    authors: list[str] = (),
+):
     """Build a minimal proto-like object (plain namespace) for testing."""
     msg = MagicMock()
     msg.story_id = story_id
     msg.title = title
     msg.themes = themes
     msg.tags = tags
+    msg.authors = list(authors)
     return msg
 
 

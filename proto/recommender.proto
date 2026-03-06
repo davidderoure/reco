@@ -93,8 +93,9 @@ message GetStoryCatalogueRequest {
 message StoryMessage {
   string story_id = 1;
   string title = 2;
-  repeated string themes = 3;  // broad category labels, e.g. "adventure"
-  repeated string tags = 4;    // fine-grained content tags, e.g. "pirates"
+  repeated string themes = 3;   // broad category labels, e.g. "craft"
+  repeated string tags = 4;     // fine-grained content tags, e.g. "goldsmith"
+  repeated string authors = 5;  // display names of the story's author(s)
 }
 
 message GetStoryCatalogueResponse {

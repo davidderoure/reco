@@ -53,101 +53,315 @@ logger = logging.getLogger("mock_server")
 # ---------------------------------------------------------------------------
 
 SAMPLE_STORIES: list[dict[str, Any]] = [
-    # Adventure (3)
+    # ── craft (3) ──────────────────────────────────────────────────────────
+    # Stories about making, skill, and the hands that shaped objects.
     {
-        "story_id": "adv_001",
-        "title": "The Kraken's Bargain",
-        "themes": ["adventure"],
-        "tags": ["pirates", "ocean", "treasure"],
+        "story_id": "cft_001",
+        "title": "The Goldsmith's Commission",
+        "authors": ["Eleanor Vane"],
+        "themes": ["craft"],
+        "tags": [
+            "anglo-saxon", "goldsmith", "alfred-the-great", "9th-century",
+            "enamel", "royalty", "ashmolean",
+        ],
     },
     {
-        "story_id": "adv_002",
-        "title": "Summit of No Return",
-        "themes": ["adventure"],
-        "tags": ["mountains", "survival", "wilderness"],
+        "story_id": "cft_002",
+        "title": "Five Thousand Years of Blue",
+        "authors": ["Tariq Nassar"],
+        "themes": ["craft"],
+        "tags": [
+            "mesopotamia", "cylinder-seal", "lapis-lazuli", "ur",
+            "3rd-millennium-bce", "artisan", "ashmolean",
+        ],
     },
     {
-        "story_id": "adv_003",
-        "title": "River of Forgotten Kings",
-        "themes": ["adventure", "history"],
-        "tags": ["jungle", "archaeology", "ancient"],
+        "story_id": "cft_003",
+        "title": "The Girl Who Counted Stitches",
+        "authors": ["Jane Morrow"],
+        "themes": ["craft"],
+        "tags": [
+            "needlework", "childhood", "georgian-england", "sampler",
+            "literacy", "domestic-arts", "18th-century",
+        ],
     },
-    # Mystery (3)
+    # ── discovery (3) ──────────────────────────────────────────────────────
+    # Stories about finding, knowing, and the cost of curiosity.
     {
-        "story_id": "mys_001",
-        "title": "The Clockmaker's Cipher",
-        "themes": ["mystery"],
-        "tags": ["detective", "clues", "city"],
-    },
-    {
-        "story_id": "mys_002",
-        "title": "Whispers in the Attic",
-        "themes": ["mystery"],
-        "tags": ["haunted", "clues", "family"],
-    },
-    {
-        "story_id": "mys_003",
-        "title": "The Missing Cartographer",
-        "themes": ["mystery", "adventure"],
-        "tags": ["maps", "clues", "wilderness"],
-    },
-    # Horror (2)
-    {
-        "story_id": "hor_001",
-        "title": "Below the Waterline",
-        "themes": ["horror"],
-        "tags": ["ocean", "monsters", "darkness"],
+        "story_id": "dsc_001",
+        "title": "The Last Bird",
+        "authors": ["Robert Sefton"],
+        "themes": ["discovery"],
+        "tags": [
+            "dodo", "extinction", "mauritius", "17th-century",
+            "natural-history", "sailors", "oxford-natural-history-museum",
+        ],
     },
     {
-        "story_id": "hor_002",
-        "title": "Children of the Long Night",
-        "themes": ["horror"],
-        "tags": ["darkness", "supernatural", "isolation"],
-    },
-    # Calm (2)
-    {
-        "story_id": "clm_001",
-        "title": "The Lantern Keeper",
-        "themes": ["calm"],
-        "tags": ["lighthouse", "ocean", "peace"],
+        "story_id": "dsc_002",
+        "title": "What the Ichthyosaur Told Mary Anning",
+        "authors": ["Celia Trench", "Adaeze Nwachukwu"],
+        "themes": ["discovery"],
+        "tags": [
+            "palaeontology", "dorset", "fossils", "working-class",
+            "women-in-science", "victorian", "oxford-natural-history-museum",
+        ],
     },
     {
-        "story_id": "clm_002",
-        "title": "Meadow Before the Rain",
-        "themes": ["calm"],
-        "tags": ["nature", "flowers", "peace"],
+        "story_id": "dsc_003",
+        "title": "The Curiosity Collector",
+        "authors": ["Sarah Blount"],
+        "themes": ["discovery"],
+        "tags": [
+            "tradescant", "virginia", "collecting", "17th-century",
+            "algonquian", "natural-history", "ashmolean",
+        ],
     },
-    # Romance (2)
+    # ── belief (3) ─────────────────────────────────────────────────────────
+    # Stories about faith, ritual, and what objects carry across death.
     {
-        "story_id": "rom_001",
-        "title": "Letters Across the Channel",
-        "themes": ["romance"],
-        "tags": ["wartime", "letters", "longing"],
-    },
-    {
-        "story_id": "rom_002",
-        "title": "A Dance at Midsummer",
-        "themes": ["romance", "calm"],
-        "tags": ["festival", "music", "longing"],
-    },
-    # History (3)
-    {
-        "story_id": "his_001",
-        "title": "The Spy of Alexandria",
-        "themes": ["history", "mystery"],
-        "tags": ["ancient", "espionage", "city"],
+        "story_id": "blf_001",
+        "title": "To Hold an Ancestor",
+        "authors": ["Mere Tane", "Catherine Fox"],
+        "themes": ["belief"],
+        "tags": [
+            "maori", "new-zealand", "greenstone", "pounamu",
+            "ancestor", "heirloom", "pitt-rivers",
+        ],
     },
     {
-        "story_id": "his_002",
-        "title": "Iron Roads West",
-        "themes": ["history", "adventure"],
-        "tags": ["frontier", "trains", "survival"],
+        "story_id": "blf_002",
+        "title": "The Shabti Speaks",
+        "authors": ["Amira El-Said"],
+        "themes": ["belief"],
+        "tags": [
+            "ancient-egypt", "shabti", "afterlife", "new-kingdom",
+            "craftsman", "thebes", "ashmolean",
+        ],
     },
     {
-        "story_id": "his_003",
-        "title": "Last Day of the Shogunate",
-        "themes": ["history"],
-        "tags": ["samurai", "ancient", "conflict"],
+        "story_id": "blf_003",
+        "title": "Amulet Road",
+        "authors": ["Leila Farrokhzad", "Magnus Lindqvist"],
+        "themes": ["belief"],
+        "tags": [
+            "silk-road", "amulets", "central-asia", "islamic-art",
+            "buddhism", "apotropaic", "ashmolean",
+        ],
+    },
+    # ── loss (3) ───────────────────────────────────────────────────────────
+    # Stories about grief, extinction, and things that cannot be recovered.
+    {
+        "story_id": "los_001",
+        "title": "The Cloak That Crossed an Ocean",
+        "authors": ["Linda Sturgeon", "James Running Bear"],
+        "themes": ["loss"],
+        "tags": [
+            "algonquian", "powhatan", "virginia", "colonialism",
+            "17th-century", "shell-beads", "ashmolean",
+        ],
+    },
+    {
+        "story_id": "los_002",
+        "title": "A Face in Wax",
+        "authors": ["Nadia Khalil"],
+        "themes": ["loss"],
+        "tags": [
+            "roman-egypt", "fayum", "mummy-portrait", "encaustic",
+            "grief", "2nd-century", "ashmolean",
+        ],
+    },
+    {
+        "story_id": "los_003",
+        "title": "Letters Never Sent",
+        "authors": ["Margaret Forsyth"],
+        "themes": ["loss"],
+        "tags": [
+            "world-war-one", "trench-art", "france", "mourning",
+            "working-class-soldiers", "personal-objects", "pitt-rivers",
+        ],
+    },
+    # ── conflict (3) ───────────────────────────────────────────────────────
+    # Stories about violence, resistance, and survival.
+    {
+        "story_id": "cnf_001",
+        "title": "The Siege of Kerma",
+        "authors": ["Amara Diallo"],
+        "themes": ["conflict"],
+        "tags": [
+            "nubia", "ancient-egypt", "kerma", "warfare",
+            "nile-valley", "military-technology", "ashmolean",
+        ],
+    },
+    {
+        "story_id": "cnf_002",
+        "title": "Headhunting Shields and the Sarawak Raj",
+        "authors": ["Ling Mei Tan", "Francis Abbot"],
+        "themes": ["conflict"],
+        "tags": [
+            "borneo", "iban", "colonial-violence", "shield",
+            "southeast-asia", "resistance", "pitt-rivers",
+        ],
+    },
+    {
+        "story_id": "cnf_003",
+        "title": "The Partisan's Rifle",
+        "authors": ["Milena Kovac"],
+        "themes": ["conflict"],
+        "tags": [
+            "world-war-two", "balkans", "resistance", "firearms",
+            "women-combatants", "occupation", "pitt-rivers",
+        ],
+    },
+    # ── power (3) ──────────────────────────────────────────────────────────
+    # Stories about authority, those who held it, and those who bore its weight.
+    {
+        "story_id": "pwr_001",
+        "title": "The King's Memory",
+        "authors": ["Chukwuemeka Obi"],
+        "themes": ["power"],
+        "tags": [
+            "benin-kingdom", "west-africa", "brass-casting", "oba",
+            "ancestor-veneration", "colonial-looting", "ashmolean",
+        ],
+    },
+    {
+        "story_id": "pwr_002",
+        "title": "The Charter and the Fist",
+        "authors": ["Tom Brannigan"],
+        "themes": ["power"],
+        "tags": [
+            "chartism", "victorian", "reform", "working-class",
+            "political-protest", "democracy", "ashmolean",
+        ],
+    },
+    {
+        "story_id": "pwr_003",
+        "title": "The Weight of Hammurabi's Word",
+        "authors": ["Layla Hassan"],
+        "themes": ["power"],
+        "tags": [
+            "babylonian", "cuneiform", "hammurabi", "law",
+            "scribe", "ancient-iraq", "ashmolean",
+        ],
+    },
+    # ── science (3) ────────────────────────────────────────────────────────
+    # Stories about observation, measurement, and the thrill of understanding.
+    {
+        "story_id": "sci_001",
+        "title": "Reading the Stars at Córdoba",
+        "authors": ["Fatima Al-Rashid"],
+        "themes": ["science"],
+        "tags": [
+            "astrolabe", "islamic-golden-age", "al-andalus", "medieval",
+            "women-in-science", "astronomy", "history-of-science-museum",
+        ],
+    },
+    {
+        "story_id": "sci_002",
+        "title": "Smallpox, a Lancet, and Lady Mary",
+        "authors": ["Constance Drew", "Babatunde Olatunji"],
+        "themes": ["science"],
+        "tags": [
+            "vaccination", "ottoman-empire", "18th-century", "inoculation",
+            "public-health", "women-and-medicine", "history-of-science-museum",
+        ],
+    },
+    {
+        "story_id": "sci_003",
+        "title": "Dead Men's Bones",
+        "authors": ["David Holt"],
+        "themes": ["science"],
+        "tags": [
+            "william-buckland", "palaeontology", "yorkshire", "hyena",
+            "19th-century", "geology", "oxford-natural-history-museum",
+        ],
+    },
+    # ── trade (2) ──────────────────────────────────────────────────────────
+    # Stories about exchange, the objects that travelled the world, and at what price.
+    {
+        "story_id": "trd_001",
+        "title": "The Long Way Round",
+        "authors": ["Li Wei", "Anna de Vries"],
+        "themes": ["trade"],
+        "tags": [
+            "chinese-porcelain", "dutch-east-india-company", "jingdezhen",
+            "17th-century", "global-trade", "canton", "ashmolean",
+        ],
+    },
+    {
+        "story_id": "trd_002",
+        "title": "The Cowrie and the Crown",
+        "authors": ["Adwoa Mensah", "Jean-Pierre Moreau"],
+        "themes": ["trade"],
+        "tags": [
+            "cowrie-shells", "west-africa", "transatlantic-slave-trade",
+            "currency", "maldives", "18th-century", "pitt-rivers",
+        ],
+    },
+    # ── migration (3) ──────────────────────────────────────────────────────
+    # Stories about leaving, arriving, and what people carried with them.
+    {
+        "story_id": "mgr_001",
+        "title": "The Hand-Axe and the First Crossing",
+        "authors": ["Nadia Petrova", "Kwame Boateng"],
+        "themes": ["migration"],
+        "tags": [
+            "palaeolithic", "hand-axe", "human-dispersal", "africa",
+            "prehistoric", "lithic-technology", "ashmolean",
+        ],
+    },
+    {
+        "story_id": "mgr_002",
+        "title": "The Weaver's Tongue",
+        "authors": ["Pierre Lemaire"],
+        "themes": ["migration"],
+        "tags": [
+            "huguenots", "religious-persecution", "silk-weaving",
+            "spitalfields", "refugee", "17th-century", "ashmolean",
+        ],
+    },
+    {
+        "story_id": "mgr_003",
+        "title": "Partition Cloth",
+        "authors": ["Sunita Kaur", "Peter Whitfield"],
+        "themes": ["migration"],
+        "tags": [
+            "india-pakistan-partition", "phulkari", "punjab", "displacement",
+            "textile", "1947", "pitt-rivers",
+        ],
+    },
+    # ── kinship (3) ────────────────────────────────────────────────────────
+    # Stories about love, family, and the bonds that objects carry.
+    {
+        "story_id": "kin_001",
+        "title": "Every Bead a Message",
+        "authors": ["Nomsa Dube"],
+        "themes": ["kinship"],
+        "tags": [
+            "zulu", "beadwork", "courtship", "coded-language",
+            "south-africa", "19th-century", "pitt-rivers",
+        ],
+    },
+    {
+        "story_id": "kin_002",
+        "title": "A Ring in the Mud",
+        "authors": ["Simon Harker"],
+        "themes": ["kinship"],
+        "tags": [
+            "roman", "ring", "thames", "oxford",
+            "soldier", "2nd-century", "ashmolean",
+        ],
+    },
+    {
+        "story_id": "kin_003",
+        "title": "The Hopi Kachina and the Absent Father",
+        "authors": ["Delores Honanie", "Marcus Webb"],
+        "themes": ["kinship"],
+        "tags": [
+            "hopi", "kachina-doll", "southwest-usa", "fatherhood",
+            "indigenous-spirituality", "ceremony", "pitt-rivers",
+        ],
     },
 ]
 
@@ -255,6 +469,7 @@ class MockStoryServiceServicer(recommender_pb2_grpc.StoryServiceServicer):
                 title=s["title"],
                 themes=s["themes"],
                 tags=s["tags"],
+                authors=s.get("authors", []),
             )
             for s in SAMPLE_STORIES
         ]
@@ -488,7 +703,7 @@ class MockServerHTTPHandler(BaseHTTPRequestHandler):
         enriched = [
             _STORY_BY_ID.get(
                 sid,
-                {"story_id": sid, "title": sid, "themes": [], "tags": []},
+                {"story_id": sid, "title": sid, "themes": [], "tags": [], "authors": []},
             )
             for sid in story_ids
         ]
@@ -616,7 +831,8 @@ header select, header input[type=text] {
   margin-bottom: 0.5rem;
   background: #f8fafc;
 }
-.story-card strong { display: block; margin-bottom: 0.2rem; }
+.story-card strong { display: block; margin-bottom: 0.15rem; }
+.story-card .story-authors { font-size: 0.72rem; color: #64748b; font-style: italic; margin-bottom: 0.15rem; }
 .story-card .story-id { font-size: 0.7rem; color: #94a3b8; margin-bottom: 0.3rem; }
 .pills { display: flex; flex-wrap: wrap; gap: 0.25rem; margin: 0.2rem 0; }
 .theme-pill {
@@ -764,12 +980,16 @@ header select, header input[type=text] {
 // Theme colour map
 // ---------------------------------------------------------------------------
 const THEME_COLORS = {
-  adventure: '#f59e0b',
-  mystery:   '#8b5cf6',
-  horror:    '#ef4444',
-  calm:      '#10b981',
-  romance:   '#ec4899',
-  history:   '#6b7280',
+  craft:     '#d97706',   // amber
+  discovery: '#2563eb',   // blue
+  belief:    '#7c3aed',   // violet
+  loss:      '#475569',   // slate
+  conflict:  '#dc2626',   // red
+  power:     '#92400e',   // brown
+  science:   '#0891b2',   // cyan
+  trade:     '#059669',   // emerald
+  migration: '#db2777',   // pink
+  kinship:   '#65a30d',   // lime
 };
 
 // ---------------------------------------------------------------------------
@@ -804,20 +1024,23 @@ function tagPill(tag) {
 }
 
 function storyCardHTML(story, showButtons) {
-  const themes = (story.themes || []).map(themePill).join('');
-  const tags   = (story.tags   || []).map(tagPill).join('');
-  const sid    = story.story_id;
-  let buttons  = '';
+  const themes  = (story.themes  || []).map(themePill).join('');
+  const tags    = (story.tags    || []).map(tagPill).join('');
+  const authors = (story.authors || []).join(', ');
+  const sid     = story.story_id;
+  let buttons   = '';
   if (showButtons) {
     buttons = `<div class="card-buttons">
       <button class="btn" onclick="sendEvent('viewed','${sid}')">&#128214; View</button>
       <button class="btn" onclick="sendEvent('completed','${sid}')">&#9989; Complete</button>
       <button class="btn" onclick="promptScore('${sid}')">&#11088; Score</button>
       <button class="btn" onclick="promptMood()">&#128149; Mood</button>
+      <button class="btn" onclick="promptReadProgress('${sid}')">&#128336; Read%</button>
     </div>`;
   }
   return `<div class="story-card">
     <strong>${story.title}</strong>
+    ${authors ? `<div class="story-authors">${authors}</div>` : ''}
     <div class="story-id">${sid}</div>
     <div class="pills">${themes}</div>
     <div class="pills">${tags}</div>
@@ -927,6 +1150,13 @@ function promptMood() {
   const score = parseInt(s, 10);
   if (score >= 1 && score <= 5) sendEvent('mood', '', score);
   else if (s !== null) alert('Please enter a number between 1 and 5.');
+}
+
+function promptReadProgress(storyId) {
+  const s = prompt('How far through this story are you? (0\\u2013100%):');
+  const pct = parseInt(s, 10);
+  if (pct >= 0 && pct <= 100) sendEvent('read_progress', storyId, pct);
+  else if (s !== null) alert('Please enter a whole number between 0 and 100.');
 }
 
 // ---------------------------------------------------------------------------
