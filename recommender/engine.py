@@ -37,13 +37,15 @@ class RecommendationEngine:
     Wildcard                  1
     ========================  =======
 
-    Results from all strategies are deduplicated (``exclude_ids`` accumulates
-    as each strategy is called) then shuffled so the C# client cannot infer
-    which slot each recommendation came from.
+    **Slot stability**: stories from the previous recommendation set that the
+    user has not yet acted on (viewed or completed) are kept in their original
+    slot positions.  Only the slots freed by user actions are replaced with
+    fresh picks.
 
-    **Fallback**: if any strategy returns fewer than its allocation, the
-    engine fills remaining slots by calling the content-based strategy first,
-    then collaborative, then random from the catalogue.
+    **Progressive coverage**: when filling open slots the engine prefers stories
+    the user has never been recommended before.  This guarantees that a user who
+    consistently acts on every recommendation will eventually be offered every
+    story in the catalogue.
 
     Args:
         catalogue: The :class:`~recommender.catalogue.StoryCatalogue`.
@@ -71,18 +73,20 @@ class RecommendationEngine:
         self._wildcard_strategy = wildcard_strategy
 
     def get_recommendations(self, user_id: str) -> list[str]:
-        """Return exactly 6 story IDs in random order for *user_id*.
+        """Return exactly 6 story IDs for *user_id*, preserving slot stability.
 
-        Runs each strategy for its allocated slots in sequence, accumulating
-        ``exclude_ids`` to prevent duplicates.  If the total is fewer than 6
-        (small catalogue or new user edge cases), fills remaining slots with
-        fallback picks.
+        Stories from the previous recommendation set that the user has not yet
+        acted on are kept in their original positions.  Open slots (stories the
+        user viewed or completed, or first-time requests) are filled with fresh
+        picks, preferring stories the user has never been recommended before.
 
         Args:
             user_id: The user requesting recommendations. Must be non-empty.
 
         Returns:
-            List of exactly 6 story IDs, shuffled.
+            Ordered list of up to 6 story IDs.  Sticky stories appear at their
+            original index; new stories are placed at open indices in random
+            order.
 
         Raises:
             ValueError: If *user_id* is empty.
@@ -94,10 +98,114 @@ class RecommendationEngine:
         catalogue = self._catalogue.get_all_stories()
         all_profiles = self._user_state_store.get_all_profiles()
 
-        exclude_ids: set[str] = set()
+        # --- Identify sticky slots ---
+        # A slot is sticky when its story hasn't been acted on (viewed or completed)
+        acted = profile.viewed_story_ids | profile.completed_story_ids
+        prev = list(profile.last_recommendations)
+        prev_padded: list[str | None] = (prev + [None] * _TOTAL_SLOTS)[:_TOTAL_SLOTS]
+
+        sticky_slots: list[str | None] = [
+            sid if (sid and sid not in acted) else None
+            for sid in prev_padded
+        ]
+        sticky_ids = {sid for sid in sticky_slots if sid}
+        open_positions = [i for i, sid in enumerate(sticky_slots) if sid is None]
+
+        # --- Fill open slots with fresh picks ---
+        fresh_picks: list[str] = []
+        if open_positions:
+            fresh_picks = self._pick_fresh(
+                profile, catalogue, all_profiles,
+                n=len(open_positions),
+                exclude_ids=sticky_ids,
+            )
+            # Shuffle so open slots get a random ordering among fresh picks
+            random.shuffle(fresh_picks)
+
+        # --- Assemble ordered result ---
+        result: list[str | None] = list(sticky_slots)
+        fresh_iter = iter(fresh_picks)
+        for pos in open_positions:
+            result[pos] = next(fresh_iter, None)
+
+        final = [sid for sid in result if sid]
+
+        # --- Update profile tracking ---
+        profile.last_recommendations = final
+        profile.recommended_story_ids.update(final)
+
+        logger.debug("Recommendations for user %r: %s", user_id, final)
+        return final
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _pick_fresh(
+        self,
+        profile: UserProfile,
+        catalogue: list[Story],
+        all_profiles: list[UserProfile],
+        n: int,
+        exclude_ids: set[str],
+    ) -> list[str]:
+        """Pick up to *n* stories for newly opened slots.
+
+        First pass: exclude stories already recommended to this user (prefer
+        novel content for progressive coverage).  If fewer than *n* novel
+        stories are available, a second pass allows previously recommended
+        stories to fill the remainder.
+
+        Args:
+            profile: Target user profile.
+            catalogue: Full story catalogue.
+            all_profiles: All user profiles (for collaborative strategy).
+            n: Number of stories needed.
+            exclude_ids: Story IDs to exclude in both passes (sticky stories).
+
+        Returns:
+            Up to *n* unique story IDs.
+        """
+        # First pass: strongly prefer stories never recommended to this user
+        exclude_with_prev = exclude_ids | profile.recommended_story_ids
+        picks = self._run_strategy_pipeline(
+            profile, catalogue, all_profiles, n, exclude_with_prev
+        )
+
+        if len(picks) < n:
+            # Relax: allow previously recommended stories
+            needed = n - len(picks)
+            relaxed_exclude = exclude_ids | set(picks)
+            more = self._run_strategy_pipeline(
+                profile, catalogue, all_profiles, needed, relaxed_exclude
+            )
+            picks.extend(more)
+
+        return picks
+
+    def _run_strategy_pipeline(
+        self,
+        profile: UserProfile,
+        catalogue: list[Story],
+        all_profiles: list[UserProfile],
+        n: int,
+        exclude_ids: set[str],
+    ) -> list[str]:
+        """Run all strategies in allocation order to collect up to *n* unique IDs.
+
+        Args:
+            profile: Target user profile.
+            catalogue: Full story catalogue.
+            all_profiles: All user profiles.
+            n: Maximum number of stories to collect.
+            exclude_ids: Story IDs to exclude (copied internally to avoid mutation).
+
+        Returns:
+            Up to *n* unique story IDs.
+        """
+        exclude_ids = set(exclude_ids)  # local copy — don't mutate caller's set
         picks: list[str] = []
 
-        # Run each strategy for its allocated slots
         for strategy_attr, n_slots in _SLOT_ALLOCATION:
             strategy: RecommendationStrategy = getattr(self, strategy_attr)
             results = strategy.recommend(
@@ -107,31 +215,19 @@ class RecommendationEngine:
                 n=n_slots,
                 exclude_ids=exclude_ids,
             )
-            # Add non-duplicate results
             for sid in results:
                 if sid not in exclude_ids:
                     picks.append(sid)
                     exclude_ids.add(sid)
-                    if len(picks) >= _TOTAL_SLOTS:
-                        break
-            if len(picks) >= _TOTAL_SLOTS:
-                break
+                    if len(picks) >= n:
+                        return picks
 
-        # Fill any remaining slots
-        if len(picks) < _TOTAL_SLOTS:
+        if len(picks) < n:
             picks = self._fill_remaining(
-                picks, exclude_ids, catalogue, profile, all_profiles
+                picks, exclude_ids, catalogue, profile, all_profiles, target=n
             )
 
-        random.shuffle(picks)
-        logger.debug(
-            "Recommendations for user %r: %s", user_id, picks
-        )
-        return picks
-
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
+        return picks[:n]
 
     def _fill_remaining(
         self,
@@ -140,11 +236,12 @@ class RecommendationEngine:
         catalogue: list[Story],
         profile: UserProfile,
         all_profiles: list[UserProfile],
+        target: int = _TOTAL_SLOTS,
     ) -> list[str]:
-        """Fill remaining slots up to ``_TOTAL_SLOTS`` using fallback strategies.
+        """Fill remaining slots up to *target* using fallback strategies.
 
         Tries content-based first, then collaborative, then random from the
-        remaining catalogue.
+        remaining catalogue, finally repeating catalogue entries as a last resort.
 
         Args:
             picks: Current picks list (modified in-place).
@@ -152,13 +249,14 @@ class RecommendationEngine:
             catalogue: Full story catalogue.
             profile: Target user profile.
             all_profiles: All user profiles.
+            target: Desired total number of picks.
 
         Returns:
-            The *picks* list padded to at most ``_TOTAL_SLOTS`` entries.
+            The *picks* list padded to at most *target* entries.
         """
-        needed = _TOTAL_SLOTS - len(picks)
+        needed = target - len(picks)
 
-        # Try content-based fallback
+        # Try content-based then collaborative fallback
         for strategy in (self._content_strategy, self._collaborative_strategy):
             if needed <= 0:
                 break

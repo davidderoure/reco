@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from recommender.catalogue import StoryCatalogue
-from recommender.models import EventType, Story, UserEvent, UserProfile
+from recommender.models import Story, UserProfile
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +77,8 @@ class UserStateStore:
                     ],
                     theme_weights=dict(model_msg.theme_weights),
                     tag_weights=dict(model_msg.tag_weights),
+                    last_recommendations=list(model_msg.last_recommendations),
+                    recommended_story_ids=set(model_msg.recommended_story_ids),
                 )
                 with self._lock:
                     self._profiles[model_msg.user_id] = profile
@@ -116,6 +118,8 @@ class UserStateStore:
                         mood_scores=mood_entries,
                         theme_weights=profile.theme_weights,
                         tag_weights=profile.tag_weights,
+                        last_recommendations=profile.last_recommendations,
+                        recommended_story_ids=list(profile.recommended_story_ids),
                     )
                 )
 

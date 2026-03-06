@@ -81,6 +81,10 @@ class UserProfile:
         mood_scores: Recent ``(timestamp, mood_score)`` pairs (capped in length).
         theme_weights: Accumulated preference weight per theme label.
         tag_weights: Accumulated preference weight per tag label.
+        last_recommendations: Ordered list of story IDs from the most recent
+            recommendation response (index = slot position shown to the user).
+        recommended_story_ids: Union of all story IDs ever recommended to this
+            user. Used to prefer novel stories when filling open slots.
     """
 
     user_id: str
@@ -90,3 +94,5 @@ class UserProfile:
     mood_scores: list[tuple[datetime, int]] = field(default_factory=list)
     theme_weights: dict[str, float] = field(default_factory=dict)
     tag_weights: dict[str, float] = field(default_factory=dict)
+    last_recommendations: list[str] = field(default_factory=list)
+    recommended_story_ids: set[str] = field(default_factory=set)

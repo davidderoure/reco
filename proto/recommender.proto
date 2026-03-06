@@ -120,6 +120,8 @@ message UserModelMessage {
   repeated MoodEntry mood_scores      = 5;  // capped recent entries
   map<string, float>  theme_weights   = 6;  // accumulated preference weight per theme
   map<string, float>  tag_weights     = 7;  // accumulated preference weight per tag
+  repeated string last_recommendations   = 8;  // previous rec set in slot order
+  repeated string recommended_story_ids  = 9;  // all stories ever recommended
 }
 
 message SaveUserModelRequest  { repeated UserModelMessage user_models = 1; }
