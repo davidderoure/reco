@@ -18,6 +18,10 @@ _WEIGHT_VIEW = 1.0
 _WEIGHT_COMPLETE_BONUS = 2.0  # additive with view weight
 _WEIGHT_SCORE_FACTOR = 0.5   # (score - 3) * factor
 
+# Maximum number of mood entries to keep in memory and persist.
+# Mood does not affect recommendation weights, so only recent history is useful.
+MOOD_HISTORY_LIMIT = 50
+
 
 class UserStateStore:
     """Thread-safe in-memory store for all user profiles.
@@ -26,8 +30,9 @@ class UserStateStore:
     coordination with the C# server for persistence.
 
     The store is the single authoritative source of user state at runtime.
-    The C# server holds the durable copy as a raw event log.  On startup,
-    call :meth:`load_all_from_server` to replay events and rebuild profiles.
+    The C# server holds a durable copy of the compiled user model (weights,
+    IDs, scores). On startup, call :meth:`load_all_from_server` to restore
+    profiles directly from the stored model — no event replay is needed.
 
     Args:
         stub: A ``StoryServiceStub`` gRPC client stub (or compatible mock).
@@ -47,45 +52,45 @@ class UserStateStore:
     # ------------------------------------------------------------------
 
     def load_all_from_server(self) -> None:
-        """Reconstruct all user profiles by replaying events from the C# server.
+        """Restore all user profiles from the compiled model stored on the C# server.
 
-        Calls ``StoryService.LoadUserState`` with an empty user-ID list (meaning
-        "all users"), then replays each event log to rebuild in-memory profiles.
+        Calls ``StoryService.LoadUserModel`` with an empty user-ID list (meaning
+        "all users") and deserializes each ``UserModelMessage`` directly into a
+        :class:`~recommender.models.UserProfile` — no event replay required.
         """
         try:
             from generated import recommender_pb2
 
-            response = self._stub.LoadUserState(
-                recommender_pb2.LoadUserStateRequest(user_ids=[])
+            response = self._stub.LoadUserModel(
+                recommender_pb2.LoadUserModelRequest(user_ids=[])
             )
             loaded = 0
-            for state_msg in response.user_states:
-                profile = UserProfile(user_id=state_msg.user_id)
-                for event_msg in state_msg.events:
-                    ts = _timestamp_to_datetime(event_msg.timestamp)
-                    event_type = EventType(event_msg.event_type)
-                    story_id = event_msg.story_id or None
-                    score = event_msg.score if event_msg.score != 0 else None
-
-                    event = UserEvent(
-                        event_type=event_type,
-                        timestamp=ts,
-                        story_id=story_id,
-                        score=score,
-                    )
-                    self._apply_event_to_profile(profile, event)
+            for model_msg in response.user_models:
+                profile = UserProfile(
+                    user_id=model_msg.user_id,
+                    viewed_story_ids=set(model_msg.viewed_story_ids),
+                    completed_story_ids=set(model_msg.completed_story_ids),
+                    story_scores=dict(model_msg.story_scores),
+                    mood_scores=[
+                        (_timestamp_to_datetime(e.timestamp), e.score)
+                        for e in model_msg.mood_scores
+                    ],
+                    theme_weights=dict(model_msg.theme_weights),
+                    tag_weights=dict(model_msg.tag_weights),
+                )
                 with self._lock:
-                    self._profiles[state_msg.user_id] = profile
+                    self._profiles[model_msg.user_id] = profile
                 loaded += 1
-            logger.info("Loaded state for %d users from server.", loaded)
+            logger.info("Loaded model for %d users from server.", loaded)
         except Exception:
-            logger.exception("Failed to load user state from server.")
+            logger.exception("Failed to load user model from server.")
 
     def persist_all_to_server(self) -> None:
-        """Serialise all user profiles as event logs and save to the C# server.
+        """Serialise all user profiles as compact models and save to the C# server.
 
-        Calls ``StoryService.SaveUserState`` with the full event log for every
-        user currently in the store.
+        Calls ``StoryService.SaveUserModel`` with the current derived state for
+        every user in the store. Payload size is bounded by catalogue vocabulary
+        size, not by interaction history length.
         """
         try:
             from generated import recommender_pb2
@@ -93,31 +98,33 @@ class UserStateStore:
             with self._lock:
                 profiles_snapshot = list(self._profiles.values())
 
-            user_states = []
+            user_models = []
             for profile in profiles_snapshot:
-                event_msgs = []
-                for event in profile.events:
-                    ts = _datetime_to_timestamp(event.timestamp)
-                    msg = recommender_pb2.UserEventMessage(
-                        event_type=event.event_type.value,
-                        story_id=event.story_id or "",
-                        score=event.score or 0,
-                        timestamp=ts,
+                mood_entries = [
+                    recommender_pb2.MoodEntry(
+                        timestamp=_datetime_to_timestamp(ts),
+                        score=score,
                     )
-                    event_msgs.append(msg)
-                user_states.append(
-                    recommender_pb2.UserStateMessage(
+                    for ts, score in profile.mood_scores
+                ]
+                user_models.append(
+                    recommender_pb2.UserModelMessage(
                         user_id=profile.user_id,
-                        events=event_msgs,
+                        viewed_story_ids=list(profile.viewed_story_ids),
+                        completed_story_ids=list(profile.completed_story_ids),
+                        story_scores=profile.story_scores,
+                        mood_scores=mood_entries,
+                        theme_weights=profile.theme_weights,
+                        tag_weights=profile.tag_weights,
                     )
                 )
 
-            self._stub.SaveUserState(
-                recommender_pb2.SaveUserStateRequest(user_states=user_states)
+            self._stub.SaveUserModel(
+                recommender_pb2.SaveUserModelRequest(user_models=user_models)
             )
-            logger.info("Persisted state for %d users to server.", len(user_states))
+            logger.info("Persisted model for %d users to server.", len(user_models))
         except Exception:
-            logger.exception("Failed to persist user state to server.")
+            logger.exception("Failed to persist user model to server.")
 
     def start_persist_loop(self, interval_seconds: int = 60) -> None:
         """Start a background daemon thread that periodically persists all state.
@@ -179,14 +186,8 @@ class UserStateStore:
             story_id: The story that was viewed.
             timestamp: When the event occurred.
         """
-        event = UserEvent(
-            event_type=EventType.VIEWED,
-            timestamp=timestamp,
-            story_id=story_id,
-        )
         with self._lock:
             profile = self.get_or_create_profile(user_id)
-            profile.events.append(event)
             profile.viewed_story_ids.add(story_id)
             story = self._catalogue.get_story(story_id)
             if story:
@@ -206,14 +207,8 @@ class UserStateStore:
             story_id: The story that was completed.
             timestamp: When the event occurred.
         """
-        event = UserEvent(
-            event_type=EventType.COMPLETED,
-            timestamp=timestamp,
-            story_id=story_id,
-        )
         with self._lock:
             profile = self.get_or_create_profile(user_id)
-            profile.events.append(event)
             profile.completed_story_ids.add(story_id)
             story = self._catalogue.get_story(story_id)
             if story:
@@ -238,15 +233,8 @@ class UserStateStore:
         """
         if not 1 <= score <= 5:
             raise ValueError(f"Score must be between 1 and 5, got {score!r}")
-        event = UserEvent(
-            event_type=EventType.SCORED,
-            timestamp=timestamp,
-            story_id=story_id,
-            score=score,
-        )
         with self._lock:
             profile = self.get_or_create_profile(user_id)
-            profile.events.append(event)
             profile.story_scores[story_id] = score
             story = self._catalogue.get_story(story_id)
             if story:
@@ -256,8 +244,8 @@ class UserStateStore:
     def record_mood(self, user_id: str, mood_score: int, timestamp: datetime) -> None:
         """Record the user's current mood score.
 
-        Mood is stored in the event log and
-        :attr:`~recommender.models.UserProfile.mood_scores` but does not
+        Mood is stored in :attr:`~recommender.models.UserProfile.mood_scores`
+        (capped at :data:`MOOD_HISTORY_LIMIT` recent entries) but does not
         directly affect theme/tag preference weights in this prototype.
 
         Args:
@@ -270,54 +258,15 @@ class UserStateStore:
         """
         if not 1 <= mood_score <= 5:
             raise ValueError(f"Mood score must be between 1 and 5, got {mood_score!r}")
-        event = UserEvent(
-            event_type=EventType.MOOD,
-            timestamp=timestamp,
-            score=mood_score,
-        )
         with self._lock:
             profile = self.get_or_create_profile(user_id)
-            profile.events.append(event)
             profile.mood_scores.append((timestamp, mood_score))
+            if len(profile.mood_scores) > MOOD_HISTORY_LIMIT:
+                profile.mood_scores = profile.mood_scores[-MOOD_HISTORY_LIMIT:]
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
-
-    def _apply_event_to_profile(self, profile: UserProfile, event: UserEvent) -> None:
-        """Replay a single event onto *profile*, updating all derived state.
-
-        Used during :meth:`load_all_from_server` to reconstruct profiles from
-        their persisted event logs without going through the public ``record_*``
-        methods (which also append to the event log).
-
-        Args:
-            profile: The profile to mutate in-place.
-            event: The event to apply.
-        """
-        profile.events.append(event)
-
-        if event.event_type == EventType.VIEWED and event.story_id:
-            profile.viewed_story_ids.add(event.story_id)
-            story = self._catalogue.get_story(event.story_id)
-            if story:
-                self._apply_weight_delta(profile, story, _WEIGHT_VIEW)
-
-        elif event.event_type == EventType.COMPLETED and event.story_id:
-            profile.completed_story_ids.add(event.story_id)
-            story = self._catalogue.get_story(event.story_id)
-            if story:
-                self._apply_weight_delta(profile, story, _WEIGHT_COMPLETE_BONUS)
-
-        elif event.event_type == EventType.SCORED and event.story_id and event.score:
-            profile.story_scores[event.story_id] = event.score
-            story = self._catalogue.get_story(event.story_id)
-            if story:
-                delta = (event.score - 3) * _WEIGHT_SCORE_FACTOR
-                self._apply_weight_delta(profile, story, delta)
-
-        elif event.event_type == EventType.MOOD and event.score:
-            profile.mood_scores.append((event.timestamp, event.score))
 
     @staticmethod
     def _apply_weight_delta(profile: UserProfile, story: Story, delta: float) -> None:

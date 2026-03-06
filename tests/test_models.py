@@ -106,7 +106,6 @@ class TestUserProfile:
     def test_default_construction(self) -> None:
         profile = UserProfile(user_id="u1")
         assert profile.user_id == "u1"
-        assert profile.events == []
         assert profile.viewed_story_ids == set()
         assert profile.completed_story_ids == set()
         assert profile.story_scores == {}
@@ -133,10 +132,8 @@ class TestUserProfile:
         p2 = UserProfile(user_id="u2")
         assert p1 != p2
 
-    def test_accumulate_events(self) -> None:
-        ts = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    def test_accumulate_viewed_story_ids(self) -> None:
         profile = UserProfile(user_id="u1")
-        event = UserEvent(event_type=EventType.VIEWED, timestamp=ts, story_id="s1")
-        profile.events.append(event)
-        assert len(profile.events) == 1
-        assert profile.events[0].story_id == "s1"
+        profile.viewed_story_ids.add("s1")
+        assert "s1" in profile.viewed_story_ids
+        assert len(profile.viewed_story_ids) == 1

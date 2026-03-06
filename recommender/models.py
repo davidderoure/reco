@@ -58,8 +58,9 @@ class UserProfile:
     """Accumulated state and preference model for a single user.
 
     This is the primary in-memory record for a user. It is built
-    incrementally from :class:`UserEvent` objects and stores pre-computed
-    preference weight dictionaries for fast recommendation lookups.
+    incrementally as events arrive and stores pre-computed preference weight
+    dictionaries for fast recommendation lookups. The derived state here is
+    what gets persisted — raw events are not stored.
 
     Weight accumulation rules (applied by :class:`~recommender.user_state.UserStateStore`):
 
@@ -74,17 +75,15 @@ class UserProfile:
 
     Attributes:
         user_id: Unique identifier for the user.
-        events: Chronological list of all raw events (used for persistence).
         viewed_story_ids: Stories the user has viewed.
         completed_story_ids: Stories the user has completed.
         story_scores: Map from ``story_id`` to the user's end-of-story score (1–5).
-        mood_scores: Chronological ``(timestamp, mood_score)`` pairs.
+        mood_scores: Recent ``(timestamp, mood_score)`` pairs (capped in length).
         theme_weights: Accumulated preference weight per theme label.
         tag_weights: Accumulated preference weight per tag label.
     """
 
     user_id: str
-    events: list[UserEvent] = field(default_factory=list)
     viewed_story_ids: set[str] = field(default_factory=set)
     completed_story_ids: set[str] = field(default_factory=set)
     story_scores: dict[str, int] = field(default_factory=dict)

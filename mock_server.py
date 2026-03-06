@@ -161,11 +161,14 @@ _DEFAULT_USERS: list[str] = ["alice", "bob", "charlie", "diana", "test_user"]
 
 
 class InMemoryUserStateStore:
-    """Thread-safe in-memory store for user event logs.
+    """Thread-safe in-memory store for user state.
 
-    Mirrors the UserStateMessage proto structure. The recommender calls
-    SaveUserState periodically to persist its in-memory state here, and
-    LoadUserState at startup to replay events.
+    Maintains two separate data sets:
+
+    * **Local event log** (``_events``): raw events recorded by the HTTP
+      handler for the web UI's event log panel. Not used by the recommender.
+    * **User models** (``_models``): compiled user models saved by the
+      recommender via ``SaveUserModel`` and returned via ``LoadUserModel``.
 
     Event dict schema::
 
@@ -180,6 +183,7 @@ class InMemoryUserStateStore:
     def __init__(self) -> None:
         self._lock = threading.RLock()
         self._events: dict[str, list[dict[str, Any]]] = {}
+        self._models: dict[str, Any] = {}  # user_id → UserModelMessage proto
 
     def record_event(
         self,
@@ -203,30 +207,17 @@ class InMemoryUserStateStore:
         with self._lock:
             return list(self._events.get(user_id, []))
 
-    def get_all_events(self) -> dict[str, list[dict[str, Any]]]:
-        """Return a full snapshot of all user events."""
+    def save_models(self, user_models: Any) -> None:
+        """Store compiled user models received from the recommender's SaveUserModel call."""
         with self._lock:
-            return {uid: list(evts) for uid, evts in self._events.items()}
+            for model in user_models:
+                self._models[model.user_id] = model
 
-    def replace_from_proto_states(self, user_states: Any) -> None:
-        """Overwrite internal state from a proto SaveUserStateRequest batch.
-
-        The recommender is the source of truth for processed state; when it
-        calls SaveUserState we accept its version wholesale.
-        """
+    def load_models(self, user_ids: list[str]) -> list[Any]:
+        """Return stored user models. If *user_ids* is empty, return all."""
         with self._lock:
-            for state in user_states:
-                events = []
-                for e in state.events:
-                    events.append(
-                        {
-                            "event_type": e.event_type,
-                            "story_id": e.story_id,
-                            "score": e.score,
-                            "timestamp_seconds": e.timestamp.seconds,
-                        }
-                    )
-                self._events[state.user_id] = events
+            wanted = set(user_ids) if user_ids else set(self._models.keys())
+            return [self._models[uid] for uid in wanted if uid in self._models]
 
 
 # Module-level singleton shared between gRPC servicer and HTTP handlers
@@ -248,8 +239,8 @@ class MockStoryServiceServicer(recommender_pb2_grpc.StoryServiceServicer):
     """Implements StoryService — the role that the real C# server plays.
 
     * GetStoryCatalogue — returns SAMPLE_STORIES on every call.
-    * SaveUserState     — accepts and stores the recommender's event logs.
-    * LoadUserState     — returns stored event logs to the recommender at startup.
+    * SaveUserModel     — accepts and stores the recommender's compiled user models.
+    * LoadUserModel     — returns stored models to the recommender at startup.
     """
 
     def GetStoryCatalogue(
@@ -270,48 +261,31 @@ class MockStoryServiceServicer(recommender_pb2_grpc.StoryServiceServicer):
         logger.info("GetStoryCatalogue → %d stories", len(stories))
         return recommender_pb2.GetStoryCatalogueResponse(stories=stories)
 
-    def SaveUserState(
+    def SaveUserModel(
         self,
-        request: recommender_pb2.SaveUserStateRequest,
+        request: recommender_pb2.SaveUserModelRequest,
         context: grpc.ServicerContext,
     ) -> empty_pb2.Empty:
-        """Accept the recommender's full event log batch."""
-        _user_state_store.replace_from_proto_states(request.user_states)
+        """Accept the recommender's compiled user model batch."""
+        _user_state_store.save_models(request.user_models)
         logger.info(
-            "SaveUserState: received state for %d users",
-            len(request.user_states),
+            "SaveUserModel: received model for %d users",
+            len(request.user_models),
         )
         return empty_pb2.Empty()
 
-    def LoadUserState(
+    def LoadUserModel(
         self,
-        request: recommender_pb2.LoadUserStateRequest,
+        request: recommender_pb2.LoadUserModelRequest,
         context: grpc.ServicerContext,
-    ) -> recommender_pb2.LoadUserStateResponse:
-        """Return stored event logs to the recommender.
+    ) -> recommender_pb2.LoadUserModelResponse:
+        """Return stored user models to the recommender.
 
         An empty ``user_ids`` list means "return all users".
         """
-        all_events = _user_state_store.get_all_events()
-        wanted = set(request.user_ids) if request.user_ids else set(all_events.keys())
-
-        user_states = []
-        for uid in wanted:
-            event_msgs = [
-                recommender_pb2.UserEventMessage(
-                    event_type=e["event_type"],
-                    story_id=e["story_id"],
-                    score=e["score"],
-                    timestamp=_make_timestamp(e["timestamp_seconds"]),
-                )
-                for e in all_events.get(uid, [])
-            ]
-            user_states.append(
-                recommender_pb2.UserStateMessage(user_id=uid, events=event_msgs)
-            )
-
-        logger.info("LoadUserState → %d users", len(user_states))
-        return recommender_pb2.LoadUserStateResponse(user_states=user_states)
+        models = _user_state_store.load_models(list(request.user_ids))
+        logger.info("LoadUserModel → %d users", len(models))
+        return recommender_pb2.LoadUserModelResponse(user_models=models)
 
 
 # ---------------------------------------------------------------------------

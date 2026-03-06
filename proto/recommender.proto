@@ -26,8 +26,8 @@ service RecommenderService {
 // -------------------------------------------------------
 service StoryService {
   rpc GetStoryCatalogue(GetStoryCatalogueRequest) returns (GetStoryCatalogueResponse);
-  rpc SaveUserState(SaveUserStateRequest) returns (google.protobuf.Empty);
-  rpc LoadUserState(LoadUserStateRequest) returns (LoadUserStateResponse);
+  rpc SaveUserModel(SaveUserModelRequest) returns (google.protobuf.Empty);
+  rpc LoadUserModel(LoadUserModelRequest) returns (LoadUserModelResponse);
 }
 
 // -------------------------------------------------------
@@ -96,6 +96,7 @@ message GetStoryCatalogueResponse {
 // User state persistence messages (Python ↔ C#)
 // -------------------------------------------------------
 
+// UserEventMessage is kept for incoming events from C# → Python only.
 message UserEventMessage {
   string event_type = 1;                // "viewed" | "completed" | "scored" | "mood"
   string story_id = 2;                  // empty for mood events
@@ -103,19 +104,24 @@ message UserEventMessage {
   google.protobuf.Timestamp timestamp = 4;
 }
 
-message UserStateMessage {
-  string user_id = 1;
-  repeated UserEventMessage events = 2; // full chronological event log
+// Compact user model persisted instead of a raw event log.
+// Size is bounded by catalogue size + vocabulary, not by interaction history.
+
+message MoodEntry {
+  google.protobuf.Timestamp timestamp = 1;
+  int32 score = 2;  // 1–5
 }
 
-message SaveUserStateRequest {
-  repeated UserStateMessage user_states = 1;
+message UserModelMessage {
+  string user_id                      = 1;
+  repeated string viewed_story_ids    = 2;
+  repeated string completed_story_ids = 3;
+  map<string, int32> story_scores     = 4;  // story_id → latest 1-5 rating
+  repeated MoodEntry mood_scores      = 5;  // capped recent entries
+  map<string, float>  theme_weights   = 6;  // accumulated preference weight per theme
+  map<string, float>  tag_weights     = 7;  // accumulated preference weight per tag
 }
 
-message LoadUserStateRequest {
-  repeated string user_ids = 1;  // empty list = load all users
-}
-
-message LoadUserStateResponse {
-  repeated UserStateMessage user_states = 1;
-}
+message SaveUserModelRequest  { repeated UserModelMessage user_models = 1; }
+message LoadUserModelRequest  { repeated string user_ids = 1; }  // empty = all users
+message LoadUserModelResponse { repeated UserModelMessage user_models = 1; }

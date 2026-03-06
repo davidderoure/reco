@@ -12,8 +12,9 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from recommender.catalogue import StoryCatalogue
-from recommender.models import EventType, Story, UserEvent, UserProfile
+from recommender.models import Story, UserProfile
 from recommender.user_state import (
+    MOOD_HISTORY_LIMIT,
     UserStateStore,
     _datetime_to_timestamp,
     _timestamp_to_datetime,
@@ -41,8 +42,8 @@ def _make_catalogue(*stories: Story) -> StoryCatalogue:
 
 def _make_store(*stories: Story) -> UserStateStore:
     stub = MagicMock()
-    # LoadUserState returns an empty response (no prior users)
-    stub.LoadUserState.return_value.user_states = []
+    # LoadUserModel returns an empty response (no prior users)
+    stub.LoadUserModel.return_value.user_models = []
     cat = _make_catalogue(*stories)
     return UserStateStore(stub=stub, catalogue=cat)
 
@@ -76,13 +77,6 @@ class TestRecordViewed:
         store.record_viewed("u1", "s1", TS)
         profile = store.get_or_create_profile("u1")
         assert "s1" in profile.viewed_story_ids
-
-    def test_appends_event_to_log(self) -> None:
-        store = _make_store(STORY_ADV)
-        store.record_viewed("u1", "s1", TS)
-        profile = store.get_or_create_profile("u1")
-        assert len(profile.events) == 1
-        assert profile.events[0].event_type == EventType.VIEWED
 
     def test_multiple_views_accumulate(self) -> None:
         store = _make_store(STORY_ADV, STORY_MYS)
@@ -130,12 +124,6 @@ class TestRecordCompleted:
         expected = _WEIGHT_VIEW + _WEIGHT_COMPLETE_BONUS
         assert profile.theme_weights["adventure"] == pytest.approx(expected)
 
-    def test_complete_event_appended(self) -> None:
-        store = _make_store(STORY_ADV)
-        store.record_completed("u1", "s1", TS)
-        profile = store.get_or_create_profile("u1")
-        assert any(e.event_type == EventType.COMPLETED for e in profile.events)
-
 
 class TestRecordScored:
     @pytest.mark.parametrize("score,expected_delta", [
@@ -179,12 +167,6 @@ class TestRecordScored:
         profile = store.get_or_create_profile("u1")
         assert profile.theme_weights["adventure"] == pytest.approx(2.0)
 
-    def test_score_event_appended(self) -> None:
-        store = _make_store(STORY_ADV)
-        store.record_scored("u1", "s1", 5, TS)
-        profile = store.get_or_create_profile("u1")
-        assert any(e.event_type == EventType.SCORED for e in profile.events)
-
 
 class TestRecordMood:
     def test_stores_mood_score(self) -> None:
@@ -214,6 +196,13 @@ class TestRecordMood:
             store.record_mood("u1", 0, TS)
         with pytest.raises(ValueError):
             store.record_mood("u1", 6, TS)
+
+    def test_mood_history_capped_at_limit(self) -> None:
+        store = _make_store()
+        for i in range(MOOD_HISTORY_LIMIT + 10):
+            store.record_mood("u1", (i % 5) + 1, TS)
+        profile = store.get_or_create_profile("u1")
+        assert len(profile.mood_scores) == MOOD_HISTORY_LIMIT
 
 
 # ---------------------------------------------------------------------------
@@ -265,71 +254,86 @@ class TestGetAllProfiles:
 
 
 class TestPersistAndLoad:
-    def test_persist_calls_save_user_state(self) -> None:
+    def test_persist_calls_save_user_model(self) -> None:
         store = _make_store(STORY_ADV)
         store.record_viewed("u1", "s1", TS)
         store.persist_all_to_server()
-        store._stub.SaveUserState.assert_called_once()
+        store._stub.SaveUserModel.assert_called_once()
 
-    def test_persist_serialises_events(self) -> None:
+    def test_persist_serialises_model_fields(self) -> None:
         store = _make_store(STORY_ADV)
         store.record_viewed("u1", "s1", TS)
+        store.record_scored("u1", "s1", 5, TS)
         store.persist_all_to_server()
-        call_args = store._stub.SaveUserState.call_args[0][0]
-        user_states = list(call_args.user_states)
-        assert len(user_states) == 1
-        assert user_states[0].user_id == "u1"
-        events = list(user_states[0].events)
-        assert len(events) == 1
-        assert events[0].event_type == "viewed"
-        assert events[0].story_id == "s1"
+        call_args = store._stub.SaveUserModel.call_args[0][0]
+        user_models = list(call_args.user_models)
+        assert len(user_models) == 1
+        model = user_models[0]
+        assert model.user_id == "u1"
+        assert "s1" in list(model.viewed_story_ids)
+        assert model.story_scores["s1"] == 5
+        assert model.theme_weights["adventure"] == pytest.approx(
+            _WEIGHT_VIEW + (5 - 3) * _WEIGHT_SCORE_FACTOR
+        )
 
     def test_persist_does_not_raise_on_stub_error(self) -> None:
         store = _make_store()
-        store._stub.SaveUserState.side_effect = RuntimeError("network error")
+        store._stub.SaveUserModel.side_effect = RuntimeError("network error")
         store.persist_all_to_server()  # should not raise
 
 
-class TestLoadAllFromServer:
-    def _make_event_msg(
-        self,
-        event_type: str,
-        story_id: str,
-        score: int,
-        ts_seconds: int = 1717243200,
-    ):
-        msg = MagicMock()
-        msg.event_type = event_type
-        msg.story_id = story_id
-        msg.score = score
-        msg.timestamp.seconds = ts_seconds
-        msg.timestamp.nanos = 0
-        return msg
+def _make_model_msg(
+    user_id: str,
+    viewed: list[str] = (),
+    completed: list[str] = (),
+    story_scores: dict = None,
+    theme_weights: dict = None,
+    tag_weights: dict = None,
+    mood_scores: list = (),
+) -> MagicMock:
+    """Build a mock UserModelMessage for use in load tests."""
+    msg = MagicMock()
+    msg.user_id = user_id
+    msg.viewed_story_ids = list(viewed)
+    msg.completed_story_ids = list(completed)
+    msg.story_scores = story_scores or {}
+    msg.theme_weights = theme_weights or {}
+    msg.tag_weights = tag_weights or {}
+    msg.mood_scores = list(mood_scores)
+    return msg
 
-    def test_replays_viewed_event(self) -> None:
-        event_msg = self._make_event_msg("viewed", "s1", 0)
-        state_msg = MagicMock()
-        state_msg.user_id = "u1"
-        state_msg.events = [event_msg]
+
+class TestLoadAllFromServer:
+    def test_restores_viewed_story_ids(self) -> None:
+        model_msg = _make_model_msg("u1", viewed=["s1"], theme_weights={"adventure": 1.0})
 
         stub = MagicMock()
-        stub.LoadUserState.return_value.user_states = [state_msg]
+        stub.LoadUserModel.return_value.user_models = [model_msg]
         cat = _make_catalogue(STORY_ADV)
         store = UserStateStore(stub=stub, catalogue=cat)
         store.load_all_from_server()
 
         profile = store.get_or_create_profile("u1")
         assert "s1" in profile.viewed_story_ids
-        assert profile.theme_weights["adventure"] == pytest.approx(_WEIGHT_VIEW)
 
-    def test_replays_scored_event(self) -> None:
-        event_msg = self._make_event_msg("scored", "s1", 5)
-        state_msg = MagicMock()
-        state_msg.user_id = "u1"
-        state_msg.events = [event_msg]
+    def test_restores_theme_weights_directly(self) -> None:
+        model_msg = _make_model_msg("u1", theme_weights={"adventure": 1.0, "mystery": 0.5})
 
         stub = MagicMock()
-        stub.LoadUserState.return_value.user_states = [state_msg]
+        stub.LoadUserModel.return_value.user_models = [model_msg]
+        cat = _make_catalogue(STORY_ADV)
+        store = UserStateStore(stub=stub, catalogue=cat)
+        store.load_all_from_server()
+
+        profile = store.get_or_create_profile("u1")
+        assert profile.theme_weights["adventure"] == pytest.approx(1.0)
+        assert profile.theme_weights["mystery"] == pytest.approx(0.5)
+
+    def test_restores_story_scores(self) -> None:
+        model_msg = _make_model_msg("u1", story_scores={"s1": 5})
+
+        stub = MagicMock()
+        stub.LoadUserModel.return_value.user_models = [model_msg]
         cat = _make_catalogue(STORY_ADV)
         store = UserStateStore(stub=stub, catalogue=cat)
         store.load_all_from_server()
@@ -339,7 +343,7 @@ class TestLoadAllFromServer:
 
     def test_load_does_not_raise_on_stub_error(self) -> None:
         stub = MagicMock()
-        stub.LoadUserState.side_effect = RuntimeError("server down")
+        stub.LoadUserModel.side_effect = RuntimeError("server down")
         cat = _make_catalogue()
         store = UserStateStore(stub=stub, catalogue=cat)
         store.load_all_from_server()  # should not raise
