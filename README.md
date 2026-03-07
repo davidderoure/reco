@@ -26,7 +26,7 @@ C# App Server ──gRPC──► Python Recommender (this repo)
 
 #### Slot stability
 
-Stories from the previous recommendation set that the user has not yet viewed or completed stay in the same list position on the next request. Only slots freed by user actions are replaced with fresh picks. This means the UI stays consistent between refreshes — stories don't jump around unless the user has acted on them.
+All 6 slots are recalculated on every call — the result is never returned from cache. If a story from the previous set reappears in the fresh calculation (and the user has not acted on it), it is placed at its original slot index. This keeps the display consistent when the catalogue is nearly exhausted and some stories must be repeated, while still allowing consecutive calls without any interaction to return different stories ("try again").
 
 #### Progressive coverage
 
@@ -44,6 +44,7 @@ Every interaction updates a per-user theme/tag weight vector:
 | Read ≥ 50% | +1.0 (same as viewed; applied once, idempotent) |
 | Read < 50% | no weight impact; progress recorded only |
 | Mood 1–5 | stored only, no weight impact |
+| Bookmarked | recorded as an analytic event only; no current weight impact |
 
 The read-progress threshold (50%) is defined by `READ_VIEWED_THRESHOLD_PERCENT` in `user_state.py`.
 
@@ -69,7 +70,7 @@ main.py                   Entry point — real recommender service
 mock_server.py            Mock C# backend + browser test UI (see below)
 load_users.py             Synthetic load generator — 100 test users (see below)
 config.py                 Environment-variable configuration
-tests/                    pytest test suite (179 tests)
+tests/                    pytest test suite (182 tests)
 ```
 
 ## Setup
@@ -114,7 +115,7 @@ Then open **http://localhost:8080** in a browser.
 
 | Panel | Description |
 |---|---|
-| **Story Catalogue** | 27 sample Oxford museum stories — click View, Complete, Score, Mood, or Read% to fire events |
+| **Story Catalogue** | 27 sample Oxford museum stories — click View, Complete, Score, Mood, Read%, or Bookmark to fire events |
 | **Recommendations** | 6 recommended stories returned by the engine after clicking "Get Recommendations" |
 | **Preference Weights** | Live bar chart of theme/tag weights, updated after every interaction |
 | **Event Log** | Timestamped record of every event fired for the selected user |
@@ -215,6 +216,7 @@ rpc UserCompletedStory(...)    returns (Empty);   // fire-and-forget
 rpc UserAnsweredQuestion(...)  returns (Empty);   // fire-and-forget (score 1–5)
 rpc UserProvidedMood(...)      returns (Empty);   // fire-and-forget (mood_score 1–5)
 rpc UserReadStory(...)         returns (Empty);   // fire-and-forget (read_percent 0–100)
+rpc UserBookmarkedStory(...)   returns (Empty);   // fire-and-forget (analytic only, no rec effect)
 rpc GetRecommendations(...)    returns (GetRecommendationsResponse);  // ≤500ms
 ```
 
