@@ -134,16 +134,21 @@ class TestShuffling:
 
 
 class TestStickySlots:
-    def test_unacted_stories_keep_their_position(self, sample_stories) -> None:
-        """Stories not viewed or completed must stay at the same index."""
+    def test_try_again_returns_fresh_stories(self, sample_stories) -> None:
+        """Consecutive calls without interactions must return different stories.
+
+        Progressive coverage adds the first set to recommended_story_ids;
+        the next call's first pass excludes those, surfacing novel stories.
+        """
         profile = UserProfile(user_id="u1")
         eng = _make_engine(sample_stories, [profile])
 
         first = eng.get_recommendations("u1")
         second = eng.get_recommendations("u1")
 
-        # No interactions between calls → all slots should be sticky
-        assert first == second
+        # 10-story catalogue, 6 slots → 4 novel stories remain after first call.
+        # Second call picks those 4 + 2 from relaxed pass; the sets must differ.
+        assert set(first) != set(second)
 
     def test_acted_slot_is_replaced(self, sample_stories) -> None:
         """A story the user viewed must not appear at its previous index."""
@@ -159,21 +164,34 @@ class TestStickySlots:
         # The acted story must have been replaced (slot 2 is now different)
         assert second[2] != acted_story
 
-    def test_sticky_stories_stay_in_exact_positions(self, sample_stories) -> None:
-        """Unacted stories must appear at exactly the same indices."""
+    def test_slot_stability_preserves_positions_for_overlapping_stories(
+        self,
+    ) -> None:
+        """A story reappearing in a fresh call must keep its original slot index.
+
+        Uses a 7-story catalogue so the second call is forced to reuse some
+        stories from the first (progressive coverage finds only 1 novel story,
+        then relaxes to fill the remaining 5 slots from the previous set).
+        """
+        stories = [
+            Story(f"s{i}", f"Title {i}", ["adventure"], [f"tag{i}"])
+            for i in range(7)
+        ]
         profile = UserProfile(user_id="u1")
-        eng = _make_engine(sample_stories, [profile])
+        eng = _make_engine(stories, [profile])
 
-        first = eng.get_recommendations("u1")
-        # Act on stories at positions 0 and 4
-        profile.viewed_story_ids.add(first[0])
-        profile.completed_story_ids.add(first[4])
+        first = eng.get_recommendations("u1")  # uses 6 of 7 stories
+        first_pos = {sid: pos for pos, sid in enumerate(first)}
 
+        # No interactions — second call has only 1 novel story; 5 repeat from first.
         second = eng.get_recommendations("u1")
 
-        # Positions 1, 2, 3, 5 must be unchanged
-        for i in (1, 2, 3, 5):
-            assert second[i] == first[i], f"Position {i} changed unexpectedly"
+        for pos, sid in enumerate(second):
+            if sid in first_pos:
+                assert pos == first_pos[sid], (
+                    f"Story {sid} was at index {first_pos[sid]} in the first call "
+                    f"but appeared at index {pos} in the second call"
+                )
 
     def test_completed_slot_is_replaced(self, sample_stories) -> None:
         """A completed story must be replaced just like a viewed one."""

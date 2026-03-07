@@ -37,15 +37,21 @@ class RecommendationEngine:
     Wildcard                  1
     ========================  =======
 
-    **Slot stability**: stories from the previous recommendation set that the
-    user has not yet acted on (viewed or completed) are kept in their original
-    slot positions.  Only the slots freed by user actions are replaced with
-    fresh picks.
+    **Fresh calculation**: all 6 slots are recalculated on every call.  The
+    result is never returned from cache, so the user can always call again to
+    receive a different set ("try again").
 
-    **Progressive coverage**: when filling open slots the engine prefers stories
-    the user has never been recommended before.  This guarantees that a user who
-    consistently acts on every recommendation will eventually be offered every
-    story in the catalogue.
+    **Slot stability**: if a story from the previous recommendation set appears
+    in the freshly-calculated picks (and the user has not acted on it), it is
+    placed at its original slot index.  This prevents jarring reordering when
+    the catalogue is nearly exhausted and the engine must repeat stories.
+
+    **Progressive coverage**: the engine prefers stories the user has never been
+    recommended before.  Because the previous recommendation set is added to
+    ``recommended_story_ids`` after every call, the next call's first pass
+    naturally excludes those stories, ensuring consecutive calls without
+    interactions return different results.  A user who consistently acts on
+    every recommendation will eventually be offered every story in the catalogue.
 
     Args:
         catalogue: The :class:`~recommender.catalogue.StoryCatalogue`.
@@ -73,20 +79,22 @@ class RecommendationEngine:
         self._wildcard_strategy = wildcard_strategy
 
     def get_recommendations(self, user_id: str) -> list[str]:
-        """Return exactly 6 story IDs for *user_id*, preserving slot stability.
+        """Return exactly 6 story IDs for *user_id*.
 
-        Stories from the previous recommendation set that the user has not yet
-        acted on are kept in their original positions.  Open slots (stories the
-        user viewed or completed, or first-time requests) are filled with fresh
-        picks, preferring stories the user has never been recommended before.
+        All 6 slots are recalculated on every call — the result is never
+        returned from cache.  Consecutive calls without any interactions return
+        different stories because progressive coverage excludes the previous
+        set on the next call's first pass.
+
+        If a freshly-calculated story was in the previous recommendation set
+        (and the user has not acted on it), it is placed at its original slot
+        index to avoid jarring reordering.
 
         Args:
             user_id: The user requesting recommendations. Must be non-empty.
 
         Returns:
-            Ordered list of up to 6 story IDs.  Sticky stories appear at their
-            original index; new stories are placed at open indices in random
-            order.
+            Ordered list of up to 6 story IDs.
 
         Raises:
             ValueError: If *user_id* is empty.
@@ -98,37 +106,37 @@ class RecommendationEngine:
         catalogue = self._catalogue.get_all_stories()
         all_profiles = self._user_state_store.get_all_profiles()
 
-        # --- Identify sticky slots ---
-        # A slot is sticky when its story hasn't been acted on (viewed or completed)
         acted = profile.viewed_story_ids | profile.completed_story_ids
-        prev = list(profile.last_recommendations)
-        prev_padded: list[str | None] = (prev + [None] * _TOTAL_SLOTS)[:_TOTAL_SLOTS]
 
-        sticky_slots: list[str | None] = [
-            sid if (sid and sid not in acted) else None
-            for sid in prev_padded
-        ]
-        sticky_ids = {sid for sid in sticky_slots if sid}
-        open_positions = [i for i, sid in enumerate(sticky_slots) if sid is None]
+        # --- Always compute a completely fresh set of 6 picks ---
+        fresh_picks = self._pick_fresh(
+            profile, catalogue, all_profiles,
+            n=_TOTAL_SLOTS,
+            exclude_ids=acted,
+        )
 
-        # --- Fill open slots with fresh picks ---
-        fresh_picks: list[str] = []
-        if open_positions:
-            fresh_picks = self._pick_fresh(
-                profile, catalogue, all_profiles,
-                n=len(open_positions),
-                exclude_ids=sticky_ids,
-            )
-            # Shuffle so open slots get a random ordering among fresh picks
-            random.shuffle(fresh_picks)
+        # --- Apply slot stability as post-processing reorder ---
+        # If a fresh pick was in last_recommendations at position P (and wasn't
+        # acted on), assign it to position P.  This preserves slot positions
+        # when the catalogue is nearly exhausted and the engine must repeat
+        # previously-recommended stories.
+        prev_pos: dict[str, int] = {
+            sid: pos
+            for pos, sid in enumerate(profile.last_recommendations)
+            if sid not in acted
+        }
+        result: list[str | None] = [None] * _TOTAL_SLOTS
+        unplaced: list[str] = []
+        for sid in fresh_picks:
+            if sid in prev_pos and result[prev_pos[sid]] is None:
+                result[prev_pos[sid]] = sid
+            else:
+                unplaced.append(sid)
+        empty_positions = [i for i, s in enumerate(result) if s is None]
+        for pos, sid in zip(empty_positions, unplaced):
+            result[pos] = sid
 
-        # --- Assemble ordered result ---
-        result: list[str | None] = list(sticky_slots)
-        fresh_iter = iter(fresh_picks)
-        for pos in open_positions:
-            result[pos] = next(fresh_iter, None)
-
-        final = [sid for sid in result if sid]
+        final = [s for s in result if s is not None]
 
         # --- Update profile tracking ---
         profile.last_recommendations = final
