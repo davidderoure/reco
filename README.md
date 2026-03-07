@@ -67,6 +67,7 @@ recommender/
   strategies/             Four strategy implementations
 main.py                   Entry point — real recommender service
 mock_server.py            Mock C# backend + browser test UI (see below)
+load_users.py             Synthetic load generator — 100 test users (see below)
 config.py                 Environment-variable configuration
 tests/                    pytest test suite (179 tests)
 ```
@@ -128,6 +129,49 @@ still holding a port. Free it with:
 ```bash
 kill $(lsof -ti :8080 -ti :50052) 2>/dev/null
 ```
+
+### Synthetic load generator (`load_users.py`)
+
+`load_users.py` populates the recommender with realistic interaction histories
+for up to 100 synthetic users (`load_user_001` … `load_user_N`), making the
+collaborative-filtering strategy meaningful right away.
+
+Each user is assigned a randomly-generated but **consistent** preference profile:
+theme weights drawn from a right-skewed Beta distribution (so each user has a
+handful of strong interests and mostly ignores the rest).  An overall engagement
+factor controls how many stories the user interacts with.
+
+| Event | Probability / value |
+|---|---|
+| Viewed | `engagement × (0.05 + 0.95 × theme_pref)` |
+| Read% | 70 % of views; amount ∝ preference (triangular distribution) |
+| Completed | `pref² × engagement × 0.8` — only strongly preferred stories |
+| Scored 1–5 | 80 % of completions; score ~ N(1 + pref × 4, 0.8) |
+| Mood 1–5 | 0–5 random events per user |
+
+Interactions are spread across a 60-day window so the timestamps are realistic.
+
+**Run with mock server already started (Terminal 1 + 2 above):**
+```bash
+# Terminal 3 — generate events for 100 users
+python load_users.py
+
+# Fewer users for a quick test
+python load_users.py --users 20
+
+# Fully reproducible run (same seed → same interaction histories)
+python load_users.py --seed 42
+
+# Also fetch recommendations for each user at the end
+python load_users.py --recs
+
+# Remote recommender
+python load_users.py --addr host:50051
+```
+
+After running, switch between `load_user_001` … `load_user_100` in the browser
+UI's user selector to inspect individual Preference Weight profiles and see how
+the collaborative-filtering strategy groups similar users.
 
 ### With a real C# server
 
