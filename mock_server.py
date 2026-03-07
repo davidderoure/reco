@@ -634,6 +634,13 @@ def grpc_send_event(
                 ),
                 timeout=3.0,
             )
+        elif event_type == "bookmark":
+            stub.UserBookmarkedStory(
+                recommender_pb2.UserBookmarkedStoryRequest(
+                    user_id=user_id, story_id=story_id, timestamp=ts
+                ),
+                timeout=3.0,
+            )
         return None
     except grpc.RpcError as exc:
         msg = f"gRPC error: {exc.code()}: {exc.details()}"
@@ -772,7 +779,12 @@ class MockServerHTTPHandler(BaseHTTPRequestHandler):
         if event_type == "read_progress" and (not story_id or not 0 <= score <= 100):
             _send_error(self, "story_id and score 0-100 required for read_progress")
             return
-        if event_type not in ("viewed", "completed", "scored", "mood", "read_progress"):
+        if event_type == "bookmark" and not story_id:
+            _send_error(self, "story_id required for bookmark")
+            return
+        if event_type not in (
+            "viewed", "completed", "scored", "mood", "read_progress", "bookmark"
+        ):
             _send_error(self, f"Unknown event type: {event_type!r}")
             return
 
@@ -1077,6 +1089,7 @@ function storyCardHTML(story, showButtons) {
       <button class="btn" onclick="promptScore('${sid}')">&#11088; Score</button>
       <button class="btn" onclick="promptMood()">&#128149; Mood</button>
       <button class="btn" onclick="promptReadProgress('${sid}')">&#128336; Read%</button>
+      <button class="btn" onclick="sendEvent('bookmark','${sid}')">&#128278; Bookmark</button>
     </div>`;
   }
   return `<div class="story-card">

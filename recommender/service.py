@@ -184,6 +184,31 @@ class RecommenderServicer:
             context.set_details("Internal error recording read progress.")
         return Empty()
 
+    def UserBookmarkedStory(self, request: Any, context: Any) -> Any:
+        """Record that a user bookmarked a story.
+
+        Bookmarks are captured as analytics events.  They currently have no
+        effect on recommendation weights or the user profile — this may change
+        in a future release (e.g. to populate a reading list or bias picks).
+
+        Args:
+            request: ``UserBookmarkedStoryRequest`` proto message.
+            context: gRPC service context.
+
+        Returns:
+            ``google.protobuf.Empty``.
+        """
+        from google.protobuf.empty_pb2 import Empty
+
+        ts = _proto_ts_to_datetime(request.timestamp)
+        logger.info(
+            "UserBookmarkedStory user=%r story=%r at=%s",
+            request.user_id,
+            request.story_id,
+            ts.isoformat(),
+        )
+        return Empty()
+
     # ------------------------------------------------------------------
     # Recommendation request
     # ------------------------------------------------------------------

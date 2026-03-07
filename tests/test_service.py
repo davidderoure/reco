@@ -304,6 +304,39 @@ class TestUserReadStory:
 
 
 # ---------------------------------------------------------------------------
+# UserBookmarkedStory tests
+# ---------------------------------------------------------------------------
+
+
+class TestUserBookmarkedStory:
+    def test_returns_empty(self) -> None:
+        from google.protobuf.empty_pb2 import Empty
+
+        servicer = _make_servicer()
+        request = MagicMock(user_id="u1", story_id="s1", timestamp=_make_ts())
+        result = servicer.UserBookmarkedStory(request, _make_context())
+        assert isinstance(result, Empty)
+
+    def test_does_not_modify_store(self) -> None:
+        """Bookmark has no current effect on user state."""
+        servicer = _make_servicer()
+        request = MagicMock(user_id="u1", story_id="s1", timestamp=_make_ts())
+        servicer.UserBookmarkedStory(request, _make_context())
+        servicer._store.record_viewed.assert_not_called()
+        servicer._store.record_completed.assert_not_called()
+        servicer._store.record_scored.assert_not_called()
+        servicer._store.record_mood.assert_not_called()
+        servicer._store.record_read_progress.assert_not_called()
+
+    def test_timestamp_is_parsed(self) -> None:
+        """The timestamp field must be converted to a datetime (no crash)."""
+        dt = datetime(2025, 3, 1, 9, 0, 0, tzinfo=timezone.utc)
+        servicer = _make_servicer()
+        request = MagicMock(user_id="u1", story_id="s1", timestamp=_make_ts(dt))
+        servicer.UserBookmarkedStory(request, _make_context())
+
+
+# ---------------------------------------------------------------------------
 # Timestamp helper tests
 # ---------------------------------------------------------------------------
 

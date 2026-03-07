@@ -16,6 +16,7 @@ service RecommenderService {
   rpc UserAnsweredQuestion(UserAnsweredQuestionRequest) returns (google.protobuf.Empty);
   rpc UserProvidedMood(UserProvidedMoodRequest) returns (google.protobuf.Empty);
   rpc UserReadStory(UserReadStoryRequest) returns (google.protobuf.Empty);
+  rpc UserBookmarkedStory(UserBookmarkedStoryRequest) returns (google.protobuf.Empty);
 
   // Request/response: returns 6 recommendations within 500ms
   rpc GetRecommendations(GetRecommendationsRequest) returns (GetRecommendationsResponse);
@@ -65,6 +66,14 @@ message UserReadStoryRequest {
   string story_id     = 2;
   int32  read_percent = 3;  // 0–100: percentage of the story read so far
   google.protobuf.Timestamp timestamp = 4;
+}
+
+message UserBookmarkedStoryRequest {
+  string user_id   = 1;
+  string story_id  = 2;
+  google.protobuf.Timestamp timestamp = 3;
+  // No additional fields: bookmark is recorded for analytics only.
+  // No current effect on recommendation weights or profile state.
 }
 
 // -------------------------------------------------------
