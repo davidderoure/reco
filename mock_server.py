@@ -421,6 +421,35 @@ class InMemoryUserStateStore:
         with self._lock:
             return list(self._events.get(user_id, []))
 
+    def get_model_weights(self, user_id: str) -> dict[str, Any] | None:
+        """Return serialised weights from the latest saved model, or None.
+
+        The recommender persists compiled models via SaveUserModel on a
+        periodic basis (default: every 60 s).  These weights reflect every
+        event the recommender has processed, including events sent directly
+        over gRPC (e.g. from load_users.py) that never touched the HTTP
+        event log.
+        """
+        with self._lock:
+            model = self._models.get(user_id)
+            if model is None:
+                return None
+            return {
+                "theme_weights": dict(model.theme_weights),
+                "tag_weights": dict(model.tag_weights),
+                "viewed_count": len(model.viewed_story_ids),
+                "completed_count": len(model.completed_story_ids),
+            }
+
+    def all_user_ids(self) -> list[str]:
+        """Return a sorted list of all known user IDs.
+
+        Includes users whose events were recorded via the HTTP API and users
+        whose models were received via SaveUserModel (e.g. load_users.py).
+        """
+        with self._lock:
+            return sorted(self._events.keys() | self._models.keys())
+
     def save_models(self, user_models: Any) -> None:
         """Store compiled user models received from the recommender's SaveUserModel call."""
         with self._lock:
@@ -649,7 +678,8 @@ class MockServerHTTPHandler(BaseHTTPRequestHandler):
     GET  /api/stories               Full catalogue JSON
     GET  /api/recommendations       Call recommender gRPC, return enriched JSON
     POST /api/event                 Fire one recommender event
-    GET  /api/state                 Return user event log
+    GET  /api/state                 Return user event log + persisted model weights
+    GET  /api/users                 Return sorted list of all known user IDs
     """
 
     def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
@@ -669,6 +699,8 @@ class MockServerHTTPHandler(BaseHTTPRequestHandler):
             self._handle_recommendations(params)
         elif path == "/api/state":
             self._handle_state(params)
+        elif path == "/api/users":
+            _send_json(self, _user_state_store.all_user_ids())
         else:
             _send_error(self, "Not found", status=404)
 
@@ -758,13 +790,21 @@ class MockServerHTTPHandler(BaseHTTPRequestHandler):
             _send_json(self, {"ok": True})
 
     def _handle_state(self, params: dict) -> None:
-        """GET /api/state?user_id=X"""
+        """GET /api/state?user_id=X
+
+        Returns the local HTTP event log plus the most recently persisted
+        model weights from the recommender (if available).  The model is
+        updated by the recommender's periodic SaveUserModel call (default
+        every 60 s) and reflects all events, including those sent directly
+        over gRPC (e.g. from load_users.py).
+        """
         uid = (params.get("user_id") or [""])[0].strip()
         if not uid:
             _send_error(self, "user_id query parameter required")
             return
         events = _user_state_store.get_events(uid)
-        _send_json(self, {"user_id": uid, "events": events})
+        model = _user_state_store.get_model_weights(uid)
+        _send_json(self, {"user_id": uid, "events": events, "model": model})
 
 
 # ---------------------------------------------------------------------------
@@ -942,7 +982,7 @@ header select, header input[type=text] {
   <input id="custom-user" type="text" placeholder="Enter user ID&hellip;"
          style="display:none;width:130px">
   <button class="btn primary" onclick="getRecommendations()">&#10024; Get Recommendations</button>
-  <button class="btn" onclick="loadState()">&#8635; Refresh State</button>
+  <button class="btn" onclick="refreshUserList(); loadState()">&#8635; Refresh State</button>
   <button class="btn" onclick="promptMood()">&#128149; Mood</button>
   <span id="status-bar" class="status-bar"></span>
   <span id="recommender-status">&#9679; Checking recommender&hellip;</span>
@@ -1172,17 +1212,29 @@ async function loadState() {
   try {
     const resp = await fetch('/api/state?user_id=' + encodeURIComponent(userId));
     const data = await resp.json();
-    renderEventLogPanel(data.events || []);
-    renderWeights(data.events || []);
+    renderEventLogPanel(data.events || [], !!data.model);
+    // Prefer authoritative weights from the persisted model (covers all events,
+    // including those sent directly over gRPC by load_users.py).  Fall back to
+    // reconstructing from the local HTTP event log for newly-active users whose
+    // model hasn't been persisted yet.
+    if (data.model && Object.keys(data.model.theme_weights || {}).length) {
+      renderWeights(data.model.theme_weights, data.model.tag_weights);
+    } else {
+      const {themeW, tagW} = weightsFromEvents(data.events || []);
+      renderWeights(themeW, tagW);
+    }
   } catch (e) {
     console.error('loadState error', e);
   }
 }
 
-function renderEventLogPanel(events) {
+function renderEventLogPanel(events, hasModel) {
   const ul = document.getElementById('event-log-list');
   if (!events.length) {
-    ul.innerHTML = '<li class="empty-state">No events recorded yet.</li>';
+    const note = hasModel
+      ? 'No browser events recorded &mdash; interactions were sent directly over gRPC (e.g. by load_users.py). Preference weights are shown from the persisted model.'
+      : 'No events recorded yet.';
+    ul.innerHTML = `<li class="empty-state">${note}</li>`;
     return;
   }
   ul.innerHTML = events.slice().reverse().map(e => {
@@ -1193,30 +1245,28 @@ function renderEventLogPanel(events) {
   }).join('');
 }
 
-function renderWeights(events) {
-  // Reconstruct weights client-side using the same rules as UserStateStore:
-  //   viewed    +1.0 per theme/tag
-  //   completed +2.0 per theme/tag
-  //   scored    (score-3)*0.5 per theme/tag
+function weightsFromEvents(events) {
+  // Reconstruct weights from the local HTTP event log using the same rules
+  // as UserStateStore.  Used as a fallback when no persisted model exists yet.
   const storyMap = Object.fromEntries(catalogue.map(s => [s.story_id, s]));
   const themeW = {};
   const tagW   = {};
-
   for (const e of events) {
     if (!e.story_id) continue;
     const story = storyMap[e.story_id];
     if (!story) continue;
-
     let delta = 0;
     if (e.event_type === 'viewed')    delta = 1.0;
     if (e.event_type === 'completed') delta = 2.0;
     if (e.event_type === 'scored')    delta = (e.score - 3) * 0.5;
     if (delta === 0) continue;
-
     for (const t of story.themes) themeW[t] = (themeW[t] || 0) + delta;
     for (const t of story.tags)   tagW[t]   = (tagW[t]   || 0) + delta;
   }
+  return {themeW, tagW};
+}
 
+function renderWeights(themeW, tagW) {
   const container = document.getElementById('weights-content');
   if (!Object.keys(themeW).length && !Object.keys(tagW).length) {
     container.innerHTML = '<p class="empty-state">No interactions yet &mdash; interact with stories to see weights build up.</p>';
@@ -1274,10 +1324,36 @@ document.getElementById('user-select').addEventListener('change', function () {
 });
 
 // ---------------------------------------------------------------------------
+// Known-user discovery
+// ---------------------------------------------------------------------------
+async function refreshUserList() {
+  // Fetch all user IDs the mock server knows about (from saved models and
+  // local event logs) and add any that aren't already in the dropdown.
+  try {
+    const resp = await fetch('/api/users');
+    const ids = await resp.json();
+    const sel = document.getElementById('user-select');
+    const existing = new Set([...sel.options].map(o => o.value));
+    const customOpt = sel.querySelector('option[value="__custom__"]');
+    for (const uid of ids) {
+      if (existing.has(uid)) continue;
+      const opt = document.createElement('option');
+      opt.value = uid;
+      opt.textContent = uid;
+      sel.insertBefore(opt, customOpt);
+      existing.add(uid);
+    }
+  } catch (e) {
+    console.error('refreshUserList error', e);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Init
 // ---------------------------------------------------------------------------
 window.addEventListener('DOMContentLoaded', async () => {
   await loadCatalogue();
+  await refreshUserList();
   await loadState();
   await checkRecommenderHealth();
 });
