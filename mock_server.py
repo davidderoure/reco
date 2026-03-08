@@ -668,6 +668,7 @@ def _send_json(handler: BaseHTTPRequestHandler, data: Any, status: int = 200) ->
     handler.send_header("Content-Type", "application/json")
     handler.send_header("Content-Length", str(len(body)))
     handler.send_header("Access-Control-Allow-Origin", "*")
+    handler.send_header("Cache-Control", "no-store")
     handler.end_headers()
     handler.wfile.write(body)
 
@@ -1050,6 +1051,13 @@ const THEME_COLORS = {
 // ---------------------------------------------------------------------------
 let catalogue = [];
 
+// Serialise all server operations so getRecommendations always sees the
+// results of any pending View/Complete/Mood events.  onclick handlers for
+// story buttons are not awaited by the browser, so without this a user who
+// rapidly clicks View → Complete → Get Recommendations could race the
+// recommendation request ahead of the events.
+let _pendingOps = Promise.resolve();
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -1138,7 +1146,15 @@ async function loadCatalogue() {
 // ---------------------------------------------------------------------------
 // Recommendations
 // ---------------------------------------------------------------------------
+// Serialised server operations
+// All calls to the server are chained through _pendingOps so that
+// getRecommendations always waits for any in-flight View/Complete/Mood events
+// to complete before requesting fresh recommendations.
+// ---------------------------------------------------------------------------
 async function getRecommendations() {
+  // Wait for any pending event operations to settle first.
+  await _pendingOps;
+
   const userId = currentUserId();
   if (!userId) { setStatus('Enter a user ID first.', true); return; }
   setStatus('Fetching recommendations\\u2026');
@@ -1167,7 +1183,7 @@ async function getRecommendations() {
 // ---------------------------------------------------------------------------
 // Events
 // ---------------------------------------------------------------------------
-async function sendEvent(type, storyId, score) {
+async function _sendEventImpl(type, storyId, score) {
   const userId = currentUserId();
   if (!userId) { setStatus('Enter a user ID first.', true); return; }
 
@@ -1190,6 +1206,12 @@ async function sendEvent(type, storyId, score) {
   } catch (e) {
     setStatus('Error: ' + e.message, true);
   }
+}
+
+function sendEvent(type, storyId, score) {
+  // Chain this event onto the pending-ops queue so that concurrent button
+  // clicks are processed in order and getRecommendations() can await them.
+  _pendingOps = _pendingOps.then(() => _sendEventImpl(type, storyId, score));
 }
 
 function promptScore(storyId) {
