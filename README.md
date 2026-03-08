@@ -139,6 +139,13 @@ switch between users and observe how different interaction histories produce
 different recommendations, and how the collaborative strategy responds once
 multiple users have built up histories.
 
+**Event ordering:** Story button clicks (View, Complete, Score, …) fire asynchronous
+gRPC calls but are serialised through a Promise queue before the "Get Recommendations"
+call is dispatched. This means clicking several buttons and then immediately clicking
+"Get Recommendations" is safe — the recommendations will reflect all preceding events.
+API responses also carry `Cache-Control: no-store` so the browser always fetches a
+fresh result.
+
 If you get `OSError: [Errno 48] Address already in use`, a previous process is
 still holding a port. Free it with:
 ```bash
