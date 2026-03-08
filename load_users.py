@@ -12,7 +12,10 @@ For each user the script fires a realistic mix of events:
   • read_progress   — 70 % of views, amount read correlated with preference
   • completed       — proportional to preference², so only truly liked stories
   • scored (1–5)    — 80 % of completions; score correlated with preference
-  • mood (1–5)      — 0–5 random mood events per user, not tied to any story
+  • mood (1–5)      — one per reading session (3–7 stories); score reflects
+                      the average preference of that session's stories so that
+                      the mood-attribution mechanism in the recommender can
+                      learn which themes correlate with mood improvement
 
 Usage
 -----
@@ -145,7 +148,14 @@ def _simulate_user(
     *,
     get_recs: bool = False,
 ) -> int:
-    """Generate and send all events for one user.  Returns the RPC count."""
+    """Generate and send all events for one user.  Returns the RPC count.
+
+    Story events are collected, sorted chronologically, then grouped into
+    reading sessions of 3–7 stories.  After each session a mood event is sent
+    whose score correlates with the average preference of that session's
+    stories.  This interleaving ensures the recommender's mood-attribution
+    mechanism sees each mood event after the relevant story interactions.
+    """
     prefs = _theme_preferences(rng)
 
     # Overall engagement factor: how active this user is (0.05 … 1.0).
@@ -159,9 +169,13 @@ def _simulate_user(
 
     rpc_count = 0
 
-    # Shuffle story order so the interaction sequence differs per user.
+    # ── Build story records (collect before sending) ─────────────────────────
+    # Each record: (story_start_dt, pref, [(event_dt, method_name, proto_msg)])
+    # Collecting first lets us sort chronologically and group into sessions.
     shuffled = STORIES[:]
     rng.shuffle(shuffled)
+
+    story_records: list[tuple[datetime, float, list[tuple[datetime, str, object]]]] = []
 
     for story in shuffled:
         pref = prefs[story["theme"]]
@@ -176,46 +190,42 @@ def _simulate_user(
         # Pick a random moment in the 60-day window for this story's events.
         event_dt = start + timedelta(seconds=rng.uniform(0, window_s))
         sid = story["story_id"]
+        events: list[tuple[datetime, str, object]] = []
 
         # ── viewed ───────────────────────────────────────────────────────────
-        stub.UserViewedStory(
+        events.append((
+            event_dt, "UserViewedStory",
             recommender_pb2.UserViewedStoryRequest(
-                user_id=user_id, story_id=sid, timestamp=_ts(event_dt)
+                user_id=user_id, story_id=sid, timestamp=_ts(event_dt),
             ),
-            timeout=_TIMEOUT,
-        )
-        rpc_count += 1
+        ))
 
         # ── read_progress (70 % of views) ────────────────────────────────────
         # Amount read follows a triangular distribution whose mode is at
         # pref × 100, so preferred stories tend to be read further.
         if rng.random() < 0.70:
             read_pct = int(rng.triangular(0, 100, pref * 100))
-            stub.UserReadStory(
+            read_dt = event_dt + timedelta(minutes=rng.uniform(1, 20))
+            events.append((
+                read_dt, "UserReadStory",
                 recommender_pb2.UserReadStoryRequest(
-                    user_id=user_id,
-                    story_id=sid,
-                    read_percent=read_pct,
-                    timestamp=_ts(event_dt + timedelta(minutes=rng.uniform(1, 20))),
+                    user_id=user_id, story_id=sid,
+                    read_percent=read_pct, timestamp=_ts(read_dt),
                 ),
-                timeout=_TIMEOUT,
-            )
-            rpc_count += 1
+            ))
 
         # ── completed (probability ∝ pref² × engagement) ─────────────────────
         # Squaring the preference makes completion selective: a story needs to
         # be genuinely liked (pref ≳ 0.7) before completion becomes likely.
         complete_prob = (pref ** 2) * engagement * 0.8
         if rng.random() < complete_prob:
-            stub.UserCompletedStory(
+            comp_dt = event_dt + timedelta(minutes=rng.uniform(5, 30))
+            events.append((
+                comp_dt, "UserCompletedStory",
                 recommender_pb2.UserCompletedStoryRequest(
-                    user_id=user_id,
-                    story_id=sid,
-                    timestamp=_ts(event_dt + timedelta(minutes=rng.uniform(5, 30))),
+                    user_id=user_id, story_id=sid, timestamp=_ts(comp_dt),
                 ),
-                timeout=_TIMEOUT,
-            )
-            rpc_count += 1
+            ))
 
             # ── scored (80 % of completions) ─────────────────────────────────
             # Score is normally distributed around (1 + pref × 4), clipped to
@@ -223,29 +233,69 @@ def _simulate_user(
             if rng.random() < 0.80:
                 raw = rng.gauss(1.0 + pref * 4.0, 0.8)
                 score = int(_clamp(round(raw), 1, 5))
-                stub.UserAnsweredQuestion(
+                score_dt = event_dt + timedelta(minutes=rng.uniform(10, 35))
+                events.append((
+                    score_dt, "UserAnsweredQuestion",
                     recommender_pb2.UserAnsweredQuestionRequest(
-                        user_id=user_id,
-                        story_id=sid,
-                        score=score,
-                        timestamp=_ts(event_dt + timedelta(minutes=rng.uniform(10, 35))),
+                        user_id=user_id, story_id=sid,
+                        score=score, timestamp=_ts(score_dt),
                     ),
-                    timeout=_TIMEOUT,
-                )
+                ))
+
+        story_records.append((event_dt, pref, events))
+
+    # Sort stories chronologically by their start time so sessions reflect
+    # a plausible reading order.
+    story_records.sort(key=lambda r: r[0])
+
+    # ── Group into reading sessions; send events then a mood event ────────────
+    # Session size 3–7 stories.  After each session, a mood event is sent.
+    # Starting mood is drawn from Beta(2,2) scaled to [1,5] (mean ≈ 3).
+    # Each subsequent mood drifts toward a target derived from the average
+    # preference of that session's stories, with Gaussian noise.
+    if story_records:
+        session_size = rng.randint(3, 7)
+        sessions = [
+            story_records[i:i + session_size]
+            for i in range(0, len(story_records), session_size)
+        ]
+
+        current_mood = int(_clamp(round(rng.betavariate(2, 2) * 4 + 1), 1, 5))
+
+        for session in sessions:
+            # Flatten and sort all events in this session chronologically.
+            session_events = [
+                (dt, method, msg)
+                for _, _, evs in session
+                for dt, method, msg in evs
+            ]
+            session_events.sort(key=lambda e: e[0])
+
+            for _, method, msg in session_events:
+                getattr(stub, method)(msg, timeout=_TIMEOUT)
                 rpc_count += 1
 
-    # ── mood events (0–5 per user, scattered across the window) ──────────────
-    for _ in range(rng.randint(0, 5)):
-        mood_dt = start + timedelta(seconds=rng.uniform(0, window_s))
-        stub.UserProvidedMood(
-            recommender_pb2.UserProvidedMoodRequest(
-                user_id=user_id,
-                mood_score=rng.randint(1, 5),
-                timestamp=_ts(mood_dt),
-            ),
-            timeout=_TIMEOUT,
-        )
-        rpc_count += 1
+            # Mood after this session: correlated with session's avg preference.
+            # preferred content (avg_pref → 1) drives mood toward 5;
+            # disliked content (avg_pref → 0) drives mood toward 1.
+            avg_pref = sum(p for _, p, _ in session) / len(session)
+            mood_target = 1.0 + avg_pref * 4.0
+            new_mood = rng.gauss(0.5 * current_mood + 0.5 * mood_target, 0.8)
+            current_mood = int(_clamp(round(new_mood), 1, 5))
+
+            # Timestamp: shortly after the last story event in the session.
+            last_dt = max(e[0] for e in session_events)
+            mood_dt = last_dt + timedelta(minutes=rng.uniform(5, 30))
+
+            stub.UserProvidedMood(
+                recommender_pb2.UserProvidedMoodRequest(
+                    user_id=user_id,
+                    mood_score=current_mood,
+                    timestamp=_ts(mood_dt),
+                ),
+                timeout=_TIMEOUT,
+            )
+            rpc_count += 1
 
     # ── optional recommendation fetch ────────────────────────────────────────
     if get_recs:

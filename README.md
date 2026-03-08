@@ -148,9 +148,9 @@ factor controls how many stories the user interacts with.
 | Read% | 70 % of views; amount ∝ preference (triangular distribution) |
 | Completed | `pref² × engagement × 0.8` — only strongly preferred stories |
 | Scored 1–5 | 80 % of completions; score ~ N(1 + pref × 4, 0.8) |
-| Mood 1–5 | 0–5 random events per user |
+| Mood 1–5 | 1 per reading session (3–7 stories); score correlates with session's avg preference, so the recommender's mood-attribution mechanism sees realistic signal |
 
-Interactions are spread across a 60-day window so the timestamps are realistic.
+Stories are sorted chronologically and grouped into sessions before sending, so each mood event arrives at the recommender *after* the story events it should be attributed to. Interactions are spread across a 60-day window so the timestamps are realistic.
 
 **Run with mock server already started (Terminal 1 + 2 above):**
 ```bash
