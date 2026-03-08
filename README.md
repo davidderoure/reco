@@ -32,6 +32,18 @@ All 6 slots are recalculated on every call — the result is never returned from
 
 When filling an open slot the engine first looks for stories it has never recommended to that user. This guarantees that a user who consistently acts on recommendations will eventually be offered every story in the catalogue. Previously-recommended stories are only repeated once all novel candidates are exhausted.
 
+#### Mood-responsive allocation
+
+The default slot counts above shift based on the user's recent average mood (last 5 entries):
+
+| Recent mood avg | Content | Collaborative | Topical | Wildcard | Rationale |
+|---|---|---|---|---|---|
+| ≤ 2.5 (low) | 3 | 2 | 1 | 0 | Familiar comfort content; no surprises |
+| 2.5–3.5 (neutral / no data) | 2 | 2 | 1 | 1 | Default |
+| ≥ 3.5 (high) | 1 | 2 | 1 | 2 | Broader exploration |
+
+Collaborative and Topical slots are held constant because collaborative recommendations surface what similar-mood users enjoy, and the topical slot anchors a known deep interest regardless of current mood state.
+
 ### User preference model
 
 Every interaction updates a per-user theme/tag weight vector:
@@ -43,10 +55,12 @@ Every interaction updates a per-user theme/tag weight vector:
 | Scored 1–5 | `(score − 3) × 0.5` |
 | Read ≥ 50% | +1.0 (same as viewed; applied once, idempotent) |
 | Read < 50% | no weight impact; progress recorded only |
-| Mood 1–5 | stored only, no weight impact |
+| Mood 1–5 | attribution feedback: `±(mood_delta / 4) × 0.5` applied to themes/tags engaged since the previous mood event — improvement boosts them, decline dampens (floor 0) |
 | Bookmarked | recorded as an analytic event only; no current weight impact |
 
 The read-progress threshold (50%) is defined by `READ_VIEWED_THRESHOLD_PERCENT` in `user_state.py`.
+
+Mood attribution factor (`MOOD_ATTRIBUTION_FACTOR = 0.5`) means a maximum mood swing of +4 (e.g. 1 → 5) adds at most half a "viewed" event of extra weight per theme/tag. The transient accumulator that tracks engaged content between mood events is not persisted; it resets on service restart.
 
 ### State persistence
 
@@ -70,7 +84,7 @@ main.py                   Entry point — real recommender service
 mock_server.py            Mock C# backend + browser test UI (see below)
 load_users.py             Synthetic load generator — 100 test users (see below)
 config.py                 Environment-variable configuration
-tests/                    pytest test suite (182 tests)
+tests/                    pytest test suite (202 tests)
 ```
 
 ## Setup
