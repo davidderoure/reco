@@ -7,7 +7,14 @@ from unittest.mock import MagicMock
 import pytest
 
 from recommender.catalogue import StoryCatalogue
-from recommender.engine import RecommendationEngine
+from recommender.engine import (
+    RecommendationEngine,
+    _mood_slot_allocation,
+    _recent_mood_level,
+    _SLOT_ALLOCATION,
+    _MOOD_LOW_THRESHOLD,
+    _MOOD_HIGH_THRESHOLD,
+)
 from recommender.models import Story, UserProfile
 from recommender.strategies.content_based import ContentBasedStrategy
 from recommender.strategies.collaborative import CollaborativeFilteringStrategy
@@ -304,3 +311,93 @@ class TestFillRemaining:
         result = eng.get_recommendations("u1")
         assert len(result) == 6
         assert len(set(result)) == 6
+
+
+# ---------------------------------------------------------------------------
+# Mood-responsive slot allocation tests
+# ---------------------------------------------------------------------------
+
+from datetime import datetime, timezone  # noqa: E402 (after fixtures for readability)
+
+_TS = datetime(2024, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
+
+
+class TestMoodSlotAllocation:
+    """_mood_slot_allocation() returns the right allocation for each mood band."""
+
+    def test_no_mood_returns_default(self) -> None:
+        assert _mood_slot_allocation(None) is _SLOT_ALLOCATION
+
+    def test_neutral_mood_returns_default(self) -> None:
+        neutral = (_MOOD_LOW_THRESHOLD + _MOOD_HIGH_THRESHOLD) / 2
+        assert _mood_slot_allocation(neutral) is _SLOT_ALLOCATION
+
+    def test_low_mood_has_no_wildcard(self) -> None:
+        allocation = dict(_mood_slot_allocation(_MOOD_LOW_THRESHOLD))
+        assert allocation["_wildcard_strategy"] == 0
+        assert allocation["_content_strategy"] == 3
+
+    def test_low_mood_boundary(self) -> None:
+        """Exactly at the low threshold should trigger the comfort allocation."""
+        allocation = dict(_mood_slot_allocation(_MOOD_LOW_THRESHOLD))
+        assert allocation["_wildcard_strategy"] == 0
+
+    def test_high_mood_has_two_wildcard_slots(self) -> None:
+        allocation = dict(_mood_slot_allocation(_MOOD_HIGH_THRESHOLD))
+        assert allocation["_wildcard_strategy"] == 2
+        assert allocation["_content_strategy"] == 1
+
+    def test_high_mood_boundary(self) -> None:
+        """Exactly at the high threshold should trigger the exploratory allocation."""
+        allocation = dict(_mood_slot_allocation(_MOOD_HIGH_THRESHOLD))
+        assert allocation["_wildcard_strategy"] == 2
+
+    def test_all_allocations_sum_to_six(self) -> None:
+        for mood_level in (None, 1.0, _MOOD_LOW_THRESHOLD, 3.0, _MOOD_HIGH_THRESHOLD, 5.0):
+            alloc = _mood_slot_allocation(mood_level)
+            assert sum(n for _, n in alloc) == 6, f"Allocation for mood={mood_level} does not sum to 6"
+
+
+class TestRecentMoodLevel:
+    """_recent_mood_level() returns the correct average of recent mood entries."""
+
+    def test_no_moods_returns_none(self) -> None:
+        profile = UserProfile(user_id="u1")
+        assert _recent_mood_level(profile) is None
+
+    def test_single_mood(self) -> None:
+        profile = UserProfile(user_id="u1", mood_scores=[(_TS, 4)])
+        assert _recent_mood_level(profile) == pytest.approx(4.0)
+
+    def test_averages_up_to_five_recent(self) -> None:
+        # 6 entries; only the 5 most recent should be averaged
+        moods = [(datetime(2024, 1, i + 1, tzinfo=timezone.utc), i + 1) for i in range(6)]
+        # Sorted ascending: scores 1,2,3,4,5,6. Five most recent = 2,3,4,5,6 → avg 4.0
+        profile = UserProfile(user_id="u1", mood_scores=moods)
+        assert _recent_mood_level(profile) == pytest.approx(4.0)
+
+
+class TestMoodResponsiveRecommendations:
+    """get_recommendations() uses mood-aware slot allocation end-to-end."""
+
+    def _sample_stories(self) -> list[Story]:
+        return [
+            Story(f"s{i}", f"Story {i}", ["adventure"], [f"tag{i}"])
+            for i in range(10)
+        ]
+
+    def test_low_mood_produces_recommendations(self) -> None:
+        """Low-mood user still gets 6 recommendations (wildcard slot = 0 is fine)."""
+        stories = self._sample_stories()
+        profile = UserProfile(user_id="u1", mood_scores=[(_TS, 1)])
+        eng = _make_engine(stories, [profile])
+        result = eng.get_recommendations("u1")
+        assert len(result) == 6
+
+    def test_high_mood_produces_recommendations(self) -> None:
+        """High-mood user gets 6 recommendations with broader exploration."""
+        stories = self._sample_stories()
+        profile = UserProfile(user_id="u1", mood_scores=[(_TS, 5)])
+        eng = _make_engine(stories, [profile])
+        result = eng.get_recommendations("u1")
+        assert len(result) == 6

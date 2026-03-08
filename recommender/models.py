@@ -73,8 +73,14 @@ class UserProfile:
     Viewed    +1.0 per theme/tag
     Completed +2.0 bonus (additive with Viewed)
     Scored    ``(score - 3) × 0.5`` per theme/tag
-    Mood      Stored only; no weight impact
+    Mood      Attribution feedback (see below); stored in ``mood_scores``
     ========  ===========================================
+
+    **Mood attribution**: when the user's mood improves relative to their
+    previous recorded mood, a small weight boost is applied to the themes and
+    tags they engaged with since that prior mood event.  When mood declines, a
+    mild dampening is applied instead.  The transient accumulator fields below
+    track this window.
 
     Attributes:
         user_id: Unique identifier for the user.
@@ -88,6 +94,14 @@ class UserProfile:
             recommendation response (index = slot position shown to the user).
         recommended_story_ids: Union of all story IDs ever recommended to this
             user. Used to prefer novel stories when filling open slots.
+        themes_since_last_mood: Transient accumulator — theme weight deltas
+            applied since the most recent mood event. Reset on each mood event.
+            Not persisted; lost on service restart.
+        tags_since_last_mood: Transient accumulator — tag weight deltas applied
+            since the most recent mood event. Reset on each mood event.
+            Not persisted; lost on service restart.
+        last_mood_score: The most recently recorded mood score (1–5), used to
+            compute the delta for attribution. Not persisted.
     """
 
     user_id: str
@@ -99,3 +113,7 @@ class UserProfile:
     tag_weights: dict[str, float] = field(default_factory=dict)
     last_recommendations: list[str] = field(default_factory=list)
     recommended_story_ids: set[str] = field(default_factory=set)
+    # Transient mood-attribution accumulators (not persisted)
+    themes_since_last_mood: dict[str, float] = field(default_factory=dict)
+    tags_since_last_mood: dict[str, float] = field(default_factory=dict)
+    last_mood_score: int | None = None

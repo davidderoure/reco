@@ -12,7 +12,7 @@ from recommender.user_state import UserStateStore
 
 logger = logging.getLogger(__name__)
 
-# Slot allocation: (strategy_attr_name, n_slots)
+# Default slot allocation: (strategy_attr_name, n_slots)
 _SLOT_ALLOCATION = [
     ("_content_strategy", 2),
     ("_collaborative_strategy", 2),
@@ -22,11 +22,64 @@ _SLOT_ALLOCATION = [
 
 _TOTAL_SLOTS = 6
 
+# Mood-responsive slot allocation thresholds and recency window
+_MOOD_LOW_THRESHOLD = 2.5   # average ≤ this → comfort-zone allocation
+_MOOD_HIGH_THRESHOLD = 3.5  # average ≥ this → exploratory allocation
+_MOOD_RECENCY_N = 5         # number of most-recent mood entries to average
+
+
+def _recent_mood_level(profile: UserProfile) -> float | None:
+    """Return the average of the *N* most recent mood scores, or ``None``.
+
+    Args:
+        profile: The user profile.
+
+    Returns:
+        Float in [1.0, 5.0] or ``None`` if no mood data exists.
+    """
+    if not profile.mood_scores:
+        return None
+    recent = sorted(profile.mood_scores, key=lambda x: x[0], reverse=True)
+    scores = [s for _, s in recent[:_MOOD_RECENCY_N]]
+    return sum(scores) / len(scores)
+
+
+def _mood_slot_allocation(
+    mood_level: float | None,
+) -> list[tuple[str, int]]:
+    """Return a strategy slot allocation tuned to *mood_level*.
+
+    Low mood → more familiar content-based picks, no wildcard surprises.
+    High mood → more wildcard exploration, fewer content-based picks.
+    Neutral or no data → default allocation.
+
+    Args:
+        mood_level: Recent average mood (1–5) or ``None``.
+
+    Returns:
+        List of ``(strategy_attr_name, n_slots)`` pairs summing to 6.
+    """
+    if mood_level is not None and mood_level <= _MOOD_LOW_THRESHOLD:
+        return [
+            ("_content_strategy", 3),
+            ("_collaborative_strategy", 2),
+            ("_topical_strategy", 1),
+            ("_wildcard_strategy", 0),
+        ]
+    if mood_level is not None and mood_level >= _MOOD_HIGH_THRESHOLD:
+        return [
+            ("_content_strategy", 1),
+            ("_collaborative_strategy", 2),
+            ("_topical_strategy", 1),
+            ("_wildcard_strategy", 2),
+        ]
+    return _SLOT_ALLOCATION
+
 
 class RecommendationEngine:
     """Orchestrates all recommendation strategies to produce the final 6 picks.
 
-    Slot allocation:
+    Default slot allocation:
 
     ========================  =======
     Strategy                  Slots
@@ -36,6 +89,12 @@ class RecommendationEngine:
     Topical (tag-based)       1
     Wildcard                  1
     ========================  =======
+
+    **Mood-responsive allocation**: the slot counts above are adjusted based on
+    the user's recent average mood score.  Low mood (≤ 2.5) shifts to
+    Content×3 / Wildcard×0 (familiar comfort content).  High mood (≥ 3.5)
+    shifts to Content×1 / Wildcard×2 (more exploration).  Collaborative and
+    Topical slots remain fixed regardless of mood.
 
     **Fresh calculation**: all 6 slots are recalculated on every call.  The
     result is never returned from cache, so the user can always call again to
@@ -108,11 +167,16 @@ class RecommendationEngine:
 
         acted = profile.viewed_story_ids | profile.completed_story_ids
 
+        # --- Derive mood-responsive slot allocation ---
+        mood_level = _recent_mood_level(profile)
+        allocation = _mood_slot_allocation(mood_level)
+
         # --- Always compute a completely fresh set of 6 picks ---
         fresh_picks = self._pick_fresh(
             profile, catalogue, all_profiles,
             n=_TOTAL_SLOTS,
             exclude_ids=acted,
+            allocation=allocation,
         )
 
         # --- Apply slot stability as post-processing reorder ---
@@ -156,6 +220,7 @@ class RecommendationEngine:
         all_profiles: list[UserProfile],
         n: int,
         exclude_ids: set[str],
+        allocation: list[tuple[str, int]] | None = None,
     ) -> list[str]:
         """Pick up to *n* stories for newly opened slots.
 
@@ -170,6 +235,8 @@ class RecommendationEngine:
             all_profiles: All user profiles (for collaborative strategy).
             n: Number of stories needed.
             exclude_ids: Story IDs to exclude in both passes (sticky stories).
+            allocation: Strategy slot allocation to use; defaults to
+                :data:`_SLOT_ALLOCATION` if ``None``.
 
         Returns:
             Up to *n* unique story IDs.
@@ -177,7 +244,8 @@ class RecommendationEngine:
         # First pass: strongly prefer stories never recommended to this user
         exclude_with_prev = exclude_ids | profile.recommended_story_ids
         picks = self._run_strategy_pipeline(
-            profile, catalogue, all_profiles, n, exclude_with_prev
+            profile, catalogue, all_profiles, n, exclude_with_prev,
+            allocation=allocation,
         )
 
         if len(picks) < n:
@@ -185,7 +253,8 @@ class RecommendationEngine:
             needed = n - len(picks)
             relaxed_exclude = exclude_ids | set(picks)
             more = self._run_strategy_pipeline(
-                profile, catalogue, all_profiles, needed, relaxed_exclude
+                profile, catalogue, all_profiles, needed, relaxed_exclude,
+                allocation=allocation,
             )
             picks.extend(more)
 
@@ -198,6 +267,7 @@ class RecommendationEngine:
         all_profiles: list[UserProfile],
         n: int,
         exclude_ids: set[str],
+        allocation: list[tuple[str, int]] | None = None,
     ) -> list[str]:
         """Run all strategies in allocation order to collect up to *n* unique IDs.
 
@@ -207,14 +277,16 @@ class RecommendationEngine:
             all_profiles: All user profiles.
             n: Maximum number of stories to collect.
             exclude_ids: Story IDs to exclude (copied internally to avoid mutation).
+            allocation: Strategy slot allocation; defaults to :data:`_SLOT_ALLOCATION`.
 
         Returns:
             Up to *n* unique story IDs.
         """
+        allocation = allocation or _SLOT_ALLOCATION
         exclude_ids = set(exclude_ids)  # local copy — don't mutate caller's set
         picks: list[str] = []
 
-        for strategy_attr, n_slots in _SLOT_ALLOCATION:
+        for strategy_attr, n_slots in allocation:
             strategy: RecommendationStrategy = getattr(self, strategy_attr)
             results = strategy.recommend(
                 profile=profile,

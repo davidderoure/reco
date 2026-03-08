@@ -14,6 +14,7 @@ import pytest
 from recommender.catalogue import StoryCatalogue
 from recommender.models import Story, UserProfile
 from recommender.user_state import (
+    MOOD_ATTRIBUTION_FACTOR,
     MOOD_HISTORY_LIMIT,
     READ_VIEWED_THRESHOLD_PERCENT,
     UserStateStore,
@@ -434,3 +435,131 @@ class TestTimestampHelpers:
         ts = _datetime_to_timestamp(naive)
         recovered = _timestamp_to_datetime(ts)
         assert recovered.tzinfo is not None
+
+
+# ---------------------------------------------------------------------------
+# Mood attribution tests
+# ---------------------------------------------------------------------------
+
+
+class TestMoodAttribution:
+    """Mood events should adjust weights for recently engaged themes/tags."""
+
+    def test_mood_improvement_boosts_engaged_themes(self) -> None:
+        """When mood rises, themes engaged since the last mood event are boosted."""
+        store = _make_store(STORY_ADV)
+        store.record_viewed("u1", "s1", TS)
+        # Baseline: theme weight after one view
+        profile = store.get_or_create_profile("u1")
+        baseline = profile.theme_weights.get("adventure", 0.0)
+
+        # First mood event — establishes the baseline score, no attribution yet
+        store.record_mood("u1", 2, TS)
+
+        # View the same story again so it's in the mood window
+        store.record_viewed("u1", "s1", TS)
+
+        # Second mood event: mood rises from 2 → 5 (delta = +3)
+        store.record_mood("u1", 5, TS)
+
+        after = profile.theme_weights.get("adventure", 0.0)
+        # Expected boost: attribution = (3/4) * MOOD_ATTRIBUTION_FACTOR
+        # Applied to accumulated window weight of _WEIGHT_VIEW
+        expected_boost = (3 / 4) * MOOD_ATTRIBUTION_FACTOR * _WEIGHT_VIEW
+        assert after == pytest.approx(baseline + _WEIGHT_VIEW + expected_boost)
+
+    def test_mood_decline_dampens_engaged_themes(self) -> None:
+        """When mood falls, weights for engaged themes are reduced (but not below 0)."""
+        store = _make_store(STORY_ADV)
+        store.record_viewed("u1", "s1", TS)
+        store.record_mood("u1", 5, TS)   # first mood: 5
+        store.record_viewed("u1", "s1", TS)
+
+        profile = store.get_or_create_profile("u1")
+        before = profile.theme_weights.get("adventure", 0.0)
+
+        store.record_mood("u1", 2, TS)   # second mood: 2 (delta = -3)
+
+        after = profile.theme_weights.get("adventure", 0.0)
+        expected_reduction = (3 / 4) * MOOD_ATTRIBUTION_FACTOR * _WEIGHT_VIEW
+        assert after == pytest.approx(before - expected_reduction)
+
+    def test_mood_weight_never_goes_below_zero(self) -> None:
+        """Dampening is capped so weights cannot become negative."""
+        store = _make_store(STORY_ADV)
+        # Tiny initial weight — only one view
+        store.record_viewed("u1", "s1", TS)
+        store.record_mood("u1", 5, TS)
+        # Add a second view so the window has weight
+        store.record_viewed("u1", "s1", TS)
+
+        profile = store.get_or_create_profile("u1")
+        # Override theme weight to be very small
+        profile.theme_weights["adventure"] = 0.01
+        profile.themes_since_last_mood["adventure"] = 100.0  # large window weight
+
+        # Big mood drop — attribution would push weight strongly negative
+        store.record_mood("u1", 1, TS)
+        assert profile.theme_weights.get("adventure", 0.0) >= 0.0
+
+    def test_accumulators_reset_after_mood_event(self) -> None:
+        """Transient accumulators are cleared when a mood event is recorded."""
+        store = _make_store(STORY_ADV)
+        store.record_viewed("u1", "s1", TS)
+        store.record_mood("u1", 3, TS)
+
+        profile = store.get_or_create_profile("u1")
+        assert profile.themes_since_last_mood == {}
+        assert profile.tags_since_last_mood == {}
+
+    def test_first_mood_event_no_attribution(self) -> None:
+        """The very first mood event records the baseline; no weights are changed."""
+        store = _make_store(STORY_ADV)
+        store.record_viewed("u1", "s1", TS)
+
+        profile = store.get_or_create_profile("u1")
+        weight_before = profile.theme_weights.get("adventure", 0.0)
+
+        store.record_mood("u1", 4, TS)
+
+        weight_after = profile.theme_weights.get("adventure", 0.0)
+        assert weight_before == weight_after
+
+    def test_equal_mood_no_attribution(self) -> None:
+        """If mood does not change, no attribution is applied."""
+        store = _make_store(STORY_ADV)
+        store.record_viewed("u1", "s1", TS)
+        store.record_mood("u1", 3, TS)
+        store.record_viewed("u1", "s1", TS)
+
+        profile = store.get_or_create_profile("u1")
+        before = profile.theme_weights.get("adventure", 0.0)
+
+        store.record_mood("u1", 3, TS)   # same score
+
+        after = profile.theme_weights.get("adventure", 0.0)
+        assert before == after
+
+    def test_accumulator_tracks_viewed_stories(self) -> None:
+        """Viewing a story adds its themes/tags to the mood window accumulator."""
+        store = _make_store(STORY_ADV)
+        store.record_mood("u1", 3, TS)  # start the window
+
+        store.record_viewed("u1", "s1", TS)
+
+        profile = store.get_or_create_profile("u1")
+        assert "adventure" in profile.themes_since_last_mood
+        assert profile.themes_since_last_mood["adventure"] == pytest.approx(_WEIGHT_VIEW)
+
+    def test_accumulator_tracks_completed_stories(self) -> None:
+        """Completing a story adds its themes/tags to the mood window accumulator."""
+        store = _make_store(STORY_ADV)
+        store.record_mood("u1", 3, TS)
+
+        store.record_completed("u1", "s1", TS)
+
+        profile = store.get_or_create_profile("u1")
+        assert "adventure" in profile.themes_since_last_mood
+        assert profile.themes_since_last_mood["adventure"] == pytest.approx(
+            _WEIGHT_COMPLETE_BONUS
+        )

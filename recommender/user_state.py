@@ -19,8 +19,13 @@ _WEIGHT_COMPLETE_BONUS = 2.0  # additive with view weight
 _WEIGHT_SCORE_FACTOR = 0.5   # (score - 3) * factor
 
 # Maximum number of mood entries to keep in memory and persist.
-# Mood does not affect recommendation weights, so only recent history is useful.
 MOOD_HISTORY_LIMIT = 50
+
+# Mood attribution: when mood changes, a fraction of the weight accumulated
+# since the previous mood event is re-applied as a boost (positive delta) or
+# dampening (negative delta).  0.5 means a full 4-point improvement adds at
+# most half a "viewed" event worth of weight per theme/tag.
+MOOD_ATTRIBUTION_FACTOR = 0.5
 
 # A read-progress event whose read_percent meets or exceeds this threshold is
 # treated as a "viewed" event: the story receives the standard view weight delta
@@ -202,6 +207,7 @@ class UserStateStore:
             story = self._catalogue.get_story(story_id)
             if story:
                 self._apply_weight_delta(profile, story, _WEIGHT_VIEW)
+                self._accumulate_mood_window(profile, story, _WEIGHT_VIEW)
 
     def record_completed(self, user_id: str, story_id: str, timestamp: datetime) -> None:
         """Record that *user_id* completed *story_id* and update preference weights.
@@ -223,6 +229,7 @@ class UserStateStore:
             story = self._catalogue.get_story(story_id)
             if story:
                 self._apply_weight_delta(profile, story, _WEIGHT_COMPLETE_BONUS)
+                self._accumulate_mood_window(profile, story, _WEIGHT_COMPLETE_BONUS)
 
     def record_scored(
         self, user_id: str, story_id: str, score: int, timestamp: datetime
@@ -289,11 +296,17 @@ class UserStateStore:
                     self._apply_weight_delta(profile, story, _WEIGHT_VIEW)
 
     def record_mood(self, user_id: str, mood_score: int, timestamp: datetime) -> None:
-        """Record the user's current mood score.
+        """Record the user's current mood score and apply attribution feedback.
 
         Mood is stored in :attr:`~recommender.models.UserProfile.mood_scores`
-        (capped at :data:`MOOD_HISTORY_LIMIT` recent entries) but does not
-        directly affect theme/tag preference weights in this prototype.
+        (capped at :data:`MOOD_HISTORY_LIMIT` recent entries).
+
+        **Attribution**: the change in mood relative to the previous recorded
+        mood is used to adjust theme/tag weights for content engaged with since
+        that prior event.  A mood improvement boosts those weights by
+        ``MOOD_ATTRIBUTION_FACTOR × (delta / 4)`` of the accumulated delta; a
+        mood decline dampens them by the same fraction (capped at 0).  The
+        transient accumulators are reset after each mood event.
 
         Args:
             user_id: The user.
@@ -307,6 +320,27 @@ class UserStateStore:
             raise ValueError(f"Mood score must be between 1 and 5, got {mood_score!r}")
         with self._lock:
             profile = self.get_or_create_profile(user_id)
+
+            # Apply attribution: boost/dampen themes & tags engaged since last mood
+            if profile.last_mood_score is not None:
+                mood_delta = mood_score - profile.last_mood_score
+                if mood_delta != 0:
+                    attribution = (mood_delta / 4) * MOOD_ATTRIBUTION_FACTOR
+                    for theme, w in profile.themes_since_last_mood.items():
+                        profile.theme_weights[theme] = max(
+                            0.0,
+                            profile.theme_weights.get(theme, 0.0) + attribution * w,
+                        )
+                    for tag, w in profile.tags_since_last_mood.items():
+                        profile.tag_weights[tag] = max(
+                            0.0,
+                            profile.tag_weights.get(tag, 0.0) + attribution * w,
+                        )
+
+            # Reset transient accumulators and record new mood
+            profile.last_mood_score = mood_score
+            profile.themes_since_last_mood = {}
+            profile.tags_since_last_mood = {}
             profile.mood_scores.append((timestamp, mood_score))
             if len(profile.mood_scores) > MOOD_HISTORY_LIMIT:
                 profile.mood_scores = profile.mood_scores[-MOOD_HISTORY_LIMIT:]
@@ -328,6 +362,30 @@ class UserStateStore:
             profile.theme_weights[theme] = profile.theme_weights.get(theme, 0.0) + delta
         for tag in story.tags:
             profile.tag_weights[tag] = profile.tag_weights.get(tag, 0.0) + delta
+
+    @staticmethod
+    def _accumulate_mood_window(
+        profile: UserProfile, story: Story, delta: float
+    ) -> None:
+        """Accumulate *delta* into the transient mood-attribution window.
+
+        Tracks how much weight has been applied to each theme/tag since the
+        last mood event so that :meth:`record_mood` can apply proportional
+        attribution when mood changes.
+
+        Args:
+            profile: The profile to mutate in-place.
+            story: The story whose themes/tags are accumulated.
+            delta: The weight delta already applied to the main weights.
+        """
+        for theme in story.themes:
+            profile.themes_since_last_mood[theme] = (
+                profile.themes_since_last_mood.get(theme, 0.0) + delta
+            )
+        for tag in story.tags:
+            profile.tags_since_last_mood[tag] = (
+                profile.tags_since_last_mood.get(tag, 0.0) + delta
+            )
 
     def _persist_loop(self, interval_seconds: int) -> None:
         """Periodically persist all user state. Runs in a daemon thread."""
