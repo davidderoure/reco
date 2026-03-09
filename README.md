@@ -30,7 +30,15 @@ All 6 slots are recalculated on every call — the result is never returned from
 
 #### Progressive coverage
 
-When filling an open slot the engine first looks for stories it has never recommended to that user. This guarantees that a user who consistently acts on recommendations will eventually be offered every story in the catalogue. Previously-recommended stories are only repeated once all novel candidates are exhausted.
+The engine fills slots using a three-tier priority system:
+
+| Tier | Stories | When used |
+|---|---|---|
+| 1 — Novel | Never recommended to this user | Always preferred first |
+| 2 — Previous | Recommended before, but not in the last batch | After Tier 1 is exhausted |
+| 3 — Last batch | Stories from the most-recent call | Final fallback |
+
+This guarantees that a user who consistently acts on recommendations will eventually be offered every story in the catalogue. It also ensures that once the catalogue is fully exhausted, consecutive "Get Recommendations" calls continue to cycle through different stories (rotating through Tier 2) rather than repeating the same set indefinitely. Stories are only repeated when the catalogue is smaller than 6 slots.
 
 #### Mood-responsive allocation
 
@@ -84,7 +92,7 @@ main.py                   Entry point — real recommender service
 mock_server.py            Mock C# backend + browser test UI (see below)
 load_users.py             Synthetic load generator — 100 test users (see below)
 config.py                 Environment-variable configuration
-tests/                    pytest test suite (202 tests)
+tests/                    pytest test suite (203 tests)
 ```
 
 ## Setup
