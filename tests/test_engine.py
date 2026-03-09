@@ -14,6 +14,7 @@ from recommender.engine import (
     _SLOT_ALLOCATION,
     _MOOD_LOW_THRESHOLD,
     _MOOD_HIGH_THRESHOLD,
+    _SKIP_DEPRIORITISE_THRESHOLD,
 )
 from recommender.models import Story, UserProfile
 from recommender.strategies.content_based import ContentBasedStrategy
@@ -294,6 +295,55 @@ class TestProgressiveCoverage:
 
         assert catalogue_ids <= profile.recommended_story_ids, (
             f"Stories never recommended: {catalogue_ids - profile.recommended_story_ids}"
+        )
+
+    def test_skip_count_increments_when_not_viewed(self, sample_stories) -> None:
+        """Stories returned but not yet viewed each have their skip count incremented."""
+        profile = UserProfile(user_id="u1")
+        eng = _make_engine(sample_stories, [profile])
+
+        result = eng.get_recommendations("u1")
+
+        for sid in result:
+            assert profile.skip_counts.get(sid, 0) == 1, (
+                f"Expected skip_counts[{sid!r}] == 1, got {profile.skip_counts.get(sid, 0)}"
+            )
+
+    def test_skip_count_resets_on_view(self, sample_stories) -> None:
+        """Viewing a story resets its skip count to zero (story returns to Tier 1a)."""
+        profile = UserProfile(user_id="u1")
+        eng = _make_engine(sample_stories, [profile])
+
+        result = eng.get_recommendations("u1")
+        viewed_sid = result[0]
+        assert profile.skip_counts.get(viewed_sid, 0) == 1  # count was incremented
+
+        # Record view through the store — this should clear the skip count
+        from datetime import datetime, timezone as tz
+        eng._user_state_store.record_viewed("u1", viewed_sid, datetime.now(tz.utc))
+
+        assert viewed_sid not in profile.skip_counts, (
+            f"Expected skip_counts to not contain {viewed_sid!r} after viewing"
+        )
+
+    def test_selecting_away_deprioritises_story(self, sample_stories) -> None:
+        """A story recommended > K times without a view is placed in Tier 2 and skipped
+        when Tier 1a has enough alternatives to fill all 6 slots.
+        """
+        profile = UserProfile(user_id="u1")
+        # Mark one story as frequently skipped (exceeds the deprioritise threshold → Tier 2)
+        deprioritised_id = sample_stories[0].story_id
+        profile.skip_counts[deprioritised_id] = _SKIP_DEPRIORITISE_THRESHOLD + 1
+
+        eng = _make_engine(sample_stories, [profile])
+
+        # 10-story catalogue: 1 story in Tier 2, 9 stories in Tier 1a (skip_count == 0).
+        # All 6 slots can be filled from Tier 1a — the Tier-2 story must not appear.
+        result = eng.get_recommendations("u1")
+
+        assert deprioritised_id not in result, (
+            f"Expected deprioritised story {deprioritised_id!r} to be absent "
+            f"when Tier 1a has enough alternatives"
         )
 
 

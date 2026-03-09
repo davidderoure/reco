@@ -30,15 +30,18 @@ All 6 slots are recalculated on every call — the result is never returned from
 
 #### Progressive coverage
 
-The engine fills slots using a three-tier priority system:
+The engine fills slots using a four-tier priority system based on each story's **skip count** — how many times it has been recommended without the user viewing it:
 
-| Tier | Stories | When used |
-|---|---|---|
-| 1 — Novel | Never recommended to this user | Always preferred first |
-| 2 — Previous | Recommended before, but not in the last batch | After Tier 1 is exhausted |
-| 3 — Last batch | Stories from the most-recent call | Final fallback |
+| Tier | Condition | Meaning | Priority |
+|---|---|---|---|
+| 1a — Fresh | `skip_count == 0`, not in last batch | Never recommended, or reset after a view | Highest |
+| 1b — Light | `0 < skip_count ≤ 3`, not in last batch | Recommended a few times; still deserves chances | High |
+| 2 — Avoid | `skip_count > 3`, not in last batch | User likely selecting away; deprioritised | Low |
+| 3 — Last batch | In the most-recent call | Cycling fallback after catalogue exhaustion | Lowest |
 
-This guarantees that a user who consistently acts on recommendations will eventually be offered every story in the catalogue. It also ensures that once the catalogue is fully exhausted, consecutive "Get Recommendations" calls continue to cycle through different stories (rotating through Tier 2) rather than repeating the same set indefinitely. Stories are only repeated when the catalogue is smaller than 6 slots.
+The skip count is incremented each time a story appears in recommendations without the user viewing or completing it, and reset to zero on view/complete. This avoids permanently burying a story that the user simply hasn't noticed yet, while gently moving aside stories the user appears to be skipping deliberately.
+
+This guarantees that a user who consistently acts on recommendations will eventually be offered every story in the catalogue. It also ensures that once the catalogue is fully exhausted, consecutive "Get Recommendations" calls continue to cycle through different stories (rotating through Tiers 1b → 2 → 3) rather than repeating the same set indefinitely. Stories are only repeated when the catalogue is smaller than 6 slots.
 
 #### Mood-responsive allocation
 
@@ -65,6 +68,7 @@ Every interaction updates a per-user theme/tag weight vector:
 | Read < 50% | no weight impact; progress recorded only |
 | Mood 1–5 | attribution feedback: `±(mood_delta / 4) × 0.5` applied to themes/tags engaged since the previous mood event — improvement boosts them, decline dampens (floor 0) |
 | Bookmarked | recorded as an analytic event only; no current weight impact |
+| Skip (no view) | `skip_count` incremented; story moves toward Tier 2 after > 3 consecutive skips |
 
 The read-progress threshold (50%) is defined by `READ_VIEWED_THRESHOLD_PERCENT` in `user_state.py`.
 
@@ -92,7 +96,7 @@ main.py                   Entry point — real recommender service
 mock_server.py            Mock C# backend + browser test UI (see below)
 load_users.py             Synthetic load generator — 100 test users (see below)
 config.py                 Environment-variable configuration
-tests/                    pytest test suite (203 tests)
+tests/                    pytest test suite (206 tests)
 ```
 
 ## Setup

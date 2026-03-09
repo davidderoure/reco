@@ -27,6 +27,11 @@ _MOOD_LOW_THRESHOLD = 2.5   # average ≤ this → comfort-zone allocation
 _MOOD_HIGH_THRESHOLD = 3.5  # average ≥ this → exploratory allocation
 _MOOD_RECENCY_N = 5         # number of most-recent mood entries to average
 
+# Skip-count threshold: a story recommended more than this many times without
+# the user viewing it is considered "selected away from" and moved to the
+# lowest-priority tier (above only the last-batch cycling fallback).
+_SKIP_DEPRIORITISE_THRESHOLD = 3
+
 
 def _recent_mood_level(profile: UserProfile) -> float | None:
     """Return the average of the *N* most recent mood scores, or ``None``.
@@ -206,6 +211,13 @@ class RecommendationEngine:
         profile.last_recommendations = final
         profile.recommended_story_ids.update(final)
 
+        # Increment skip counts for every story returned that the user has not
+        # yet viewed or completed.  This captures implicit "not interested"
+        # signal: a story shown repeatedly without engagement is deprioritised.
+        for sid in final:
+            if sid not in acted:
+                profile.skip_counts[sid] = profile.skip_counts.get(sid, 0) + 1
+
         logger.debug("Recommendations for user %r: %s", user_id, final)
         return final
 
@@ -222,24 +234,27 @@ class RecommendationEngine:
         exclude_ids: set[str],
         allocation: list[tuple[str, int]] | None = None,
     ) -> list[str]:
-        """Pick up to *n* stories using three priority tiers.
+        """Pick up to *n* stories using four priority tiers.
 
         The catalogue is pre-filtered into tiers before being passed to
         :meth:`_run_strategy_pipeline`.  Pre-filtering (rather than relying on
         ``exclude_ids``) prevents :meth:`_fill_remaining`'s last-resort path
         from reaching into a higher-priority tier's stories.
 
-        **Tier 1 — novel:** stories never recommended to this user.  Used first
-        so that a user who consistently acts on recommendations will eventually
-        see every story in the catalogue (progressive coverage).
+        **Tier 1a — fresh:** ``skip_count == 0`` — never shown to this user, or
+        shown and then viewed (count reset).  Highest priority.
 
-        **Tier 2 — previous:** recommended before, but *outside* the most-recent
-        batch.  Ensures that consecutive calls after the catalogue is exhausted
-        cycle through different stories rather than repeating the same set.
+        **Tier 1b — light:** ``0 < skip_count ≤ K`` — shown a few times without
+        a view.  Still recommended freely; a story the user hasn't noticed yet
+        deserves more chances.
+
+        **Tier 2 — avoid:** ``skip_count > K`` — shown repeatedly without any
+        engagement.  User is likely "selecting away" from these stories; they
+        are deprioritised but not permanently excluded.
 
         **Tier 3 — last batch:** stories from the most-recent recommendation
-        set.  Used as a final fallback when the catalogue is too small to avoid
-        repeating the previous batch entirely.
+        set.  Cycling fallback; always last priority to ensure consecutive calls
+        rotate through different stories after the catalogue is exhausted.
 
         Args:
             profile: Target user profile.
@@ -255,19 +270,36 @@ class RecommendationEngine:
             Up to *n* unique story IDs.
         """
         prev_batch = set(profile.last_recommendations) - exclude_ids
+        K = _SKIP_DEPRIORITISE_THRESHOLD
 
-        # Pre-filter catalogue into three tiers. exclude_ids is applied to every
-        # tier; the boundary between tiers is determined by recommended_story_ids
-        # and prev_batch rather than by exclude_ids passed to the pipeline.
-        tier1 = [
+        # Pre-filter catalogue into four priority tiers.  Using pre-filtered
+        # sub-catalogues (rather than a large exclude_ids) prevents
+        # _fill_remaining's last-resort path from crossing tier boundaries.
+        #
+        # Tier 1a — fresh:   skip_count == 0 (never shown, or reset after view)
+        # Tier 1b — light:   0 < skip_count ≤ K (shown a few times, still ok)
+        # Tier 2  — avoid:   skip_count > K (user appears to be selecting away)
+        # Tier 3  — batch:   stories from the most-recent recommendation set
+        #                    (cycling fallback; always last priority)
+        #
+        # All tiers exclude hard-excluded (acted-on) stories and the last batch,
+        # except Tier 3 which IS the last batch.
+        tier1a = [
             s for s in catalogue
             if s.story_id not in exclude_ids
-            and s.story_id not in profile.recommended_story_ids
+            and profile.skip_counts.get(s.story_id, 0) == 0
+            and s.story_id not in prev_batch
+        ]
+        tier1b = [
+            s for s in catalogue
+            if s.story_id not in exclude_ids
+            and 0 < profile.skip_counts.get(s.story_id, 0) <= K
+            and s.story_id not in prev_batch
         ]
         tier2 = [
             s for s in catalogue
             if s.story_id not in exclude_ids
-            and s.story_id in profile.recommended_story_ids
+            and profile.skip_counts.get(s.story_id, 0) > K
             and s.story_id not in prev_batch
         ]
         tier3 = [
@@ -279,7 +311,7 @@ class RecommendationEngine:
         picks: list[str] = []
         picked_set: set[str] = set()
 
-        for tier_cat in (tier1, tier2, tier3):
+        for tier_cat in (tier1a, tier1b, tier2, tier3):
             if len(picks) >= n or not tier_cat:
                 continue
             # Cap the request to what this tier can supply.  Without this cap,

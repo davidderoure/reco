@@ -204,6 +204,7 @@ class UserStateStore:
         with self._lock:
             profile = self.get_or_create_profile(user_id)
             profile.viewed_story_ids.add(story_id)
+            profile.skip_counts.pop(story_id, None)
             story = self._catalogue.get_story(story_id)
             if story:
                 self._apply_weight_delta(profile, story, _WEIGHT_VIEW)
@@ -226,6 +227,7 @@ class UserStateStore:
         with self._lock:
             profile = self.get_or_create_profile(user_id)
             profile.completed_story_ids.add(story_id)
+            profile.skip_counts.pop(story_id, None)
             story = self._catalogue.get_story(story_id)
             if story:
                 self._apply_weight_delta(profile, story, _WEIGHT_COMPLETE_BONUS)
@@ -291,6 +293,7 @@ class UserStateStore:
                 and story_id not in profile.viewed_story_ids
             ):
                 profile.viewed_story_ids.add(story_id)
+                profile.skip_counts.pop(story_id, None)
                 story = self._catalogue.get_story(story_id)
                 if story:
                     self._apply_weight_delta(profile, story, _WEIGHT_VIEW)

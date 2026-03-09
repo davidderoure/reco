@@ -102,6 +102,14 @@ class UserProfile:
             Not persisted; lost on service restart.
         last_mood_score: The most recently recorded mood score (1–5), used to
             compute the delta for attribution. Not persisted.
+        skip_counts: Transient counter — how many times each story has been
+            recommended to this user without the user viewing or completing it.
+            Incremented by the engine each time a story appears in a returned
+            recommendation set while still unviewed; reset to zero (key removed)
+            when the story is viewed or completed.  Used to detect implicit
+            "selecting away" behaviour: stories with a high skip count are
+            deprioritised relative to fresher alternatives.  Not persisted;
+            lost on service restart (rebuilds quickly after a few calls).
     """
 
     user_id: str
@@ -113,7 +121,8 @@ class UserProfile:
     tag_weights: dict[str, float] = field(default_factory=dict)
     last_recommendations: list[str] = field(default_factory=list)
     recommended_story_ids: set[str] = field(default_factory=set)
-    # Transient mood-attribution accumulators (not persisted)
+    # Transient accumulators (not persisted)
     themes_since_last_mood: dict[str, float] = field(default_factory=dict)
     tags_since_last_mood: dict[str, float] = field(default_factory=dict)
     last_mood_score: int | None = None
+    skip_counts: dict[str, int] = field(default_factory=dict)
