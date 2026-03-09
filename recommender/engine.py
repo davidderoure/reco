@@ -222,38 +222,86 @@ class RecommendationEngine:
         exclude_ids: set[str],
         allocation: list[tuple[str, int]] | None = None,
     ) -> list[str]:
-        """Pick up to *n* stories for newly opened slots.
+        """Pick up to *n* stories using three priority tiers.
 
-        First pass: exclude stories already recommended to this user (prefer
-        novel content for progressive coverage).  If fewer than *n* novel
-        stories are available, a second pass allows previously recommended
-        stories to fill the remainder.
+        The catalogue is pre-filtered into tiers before being passed to
+        :meth:`_run_strategy_pipeline`.  Pre-filtering (rather than relying on
+        ``exclude_ids``) prevents :meth:`_fill_remaining`'s last-resort path
+        from reaching into a higher-priority tier's stories.
+
+        **Tier 1 — novel:** stories never recommended to this user.  Used first
+        so that a user who consistently acts on recommendations will eventually
+        see every story in the catalogue (progressive coverage).
+
+        **Tier 2 — previous:** recommended before, but *outside* the most-recent
+        batch.  Ensures that consecutive calls after the catalogue is exhausted
+        cycle through different stories rather than repeating the same set.
+
+        **Tier 3 — last batch:** stories from the most-recent recommendation
+        set.  Used as a final fallback when the catalogue is too small to avoid
+        repeating the previous batch entirely.
 
         Args:
             profile: Target user profile.
             catalogue: Full story catalogue.
             all_profiles: All user profiles (for collaborative strategy).
             n: Number of stories needed.
-            exclude_ids: Story IDs to exclude in both passes (sticky stories).
-            allocation: Strategy slot allocation to use; defaults to
+            exclude_ids: Story IDs to hard-exclude from all tiers (acted-on
+                stories that must not be recommended again).
+            allocation: Strategy slot allocation; defaults to
                 :data:`_SLOT_ALLOCATION` if ``None``.
 
         Returns:
             Up to *n* unique story IDs.
         """
-        # First pass: strongly prefer stories never recommended to this user
-        exclude_with_prev = exclude_ids | profile.recommended_story_ids
-        picks = self._run_strategy_pipeline(
-            profile, catalogue, all_profiles, n, exclude_with_prev,
-            allocation=allocation,
-        )
+        prev_batch = set(profile.last_recommendations) - exclude_ids
+
+        # Pre-filter catalogue into three tiers. exclude_ids is applied to every
+        # tier; the boundary between tiers is determined by recommended_story_ids
+        # and prev_batch rather than by exclude_ids passed to the pipeline.
+        tier1 = [
+            s for s in catalogue
+            if s.story_id not in exclude_ids
+            and s.story_id not in profile.recommended_story_ids
+        ]
+        tier2 = [
+            s for s in catalogue
+            if s.story_id not in exclude_ids
+            and s.story_id in profile.recommended_story_ids
+            and s.story_id not in prev_batch
+        ]
+        tier3 = [
+            s for s in catalogue
+            if s.story_id not in exclude_ids
+            and s.story_id in prev_batch
+        ]
+
+        picks: list[str] = []
+        picked_set: set[str] = set()
+
+        for tier_cat in (tier1, tier2, tier3):
+            if len(picks) >= n or not tier_cat:
+                continue
+            # Cap the request to what this tier can supply.  Without this cap,
+            # _fill_remaining's absolute last-resort path would repeat stories
+            # already picked from the same tier to satisfy an over-large request,
+            # producing duplicates in the final output.
+            tier_request = min(n - len(picks), len(tier_cat))
+            more = self._run_strategy_pipeline(
+                profile, tier_cat, all_profiles, tier_request,
+                picked_set,  # dedup across tiers; tier_cat enforces the tier boundary
+                allocation=allocation,
+            )
+            picks.extend(more)
+            picked_set.update(more)
 
         if len(picks) < n:
-            # Relax: allow previously recommended stories
-            needed = n - len(picks)
-            relaxed_exclude = exclude_ids | set(picks)
+            # Whole catalogue is smaller than n slots (or all tiers combined cannot
+            # fill n).  Fall back to the full catalogue and let _fill_remaining's
+            # last-resort path repeat stories as needed.
             more = self._run_strategy_pipeline(
-                profile, catalogue, all_profiles, needed, relaxed_exclude,
+                profile, catalogue, all_profiles, n - len(picks),
+                picked_set,
                 allocation=allocation,
             )
             picks.extend(more)

@@ -251,6 +251,33 @@ class TestProgressiveCoverage:
         new_story = second[0]
         assert new_story not in already_recommended
 
+    def test_cycling_continues_after_catalogue_exhausted(self, sample_stories) -> None:
+        """After all stories are recommended, consecutive calls still rotate stories.
+
+        Once recommended_story_ids covers the whole catalogue, Pass 1 yields nothing.
+        The new intermediate pass excludes the last batch so the user sees different
+        stories on each call rather than the same frozen set.
+        """
+        profile = UserProfile(user_id="u1")
+        eng = _make_engine(sample_stories, [profile])  # 10-story catalogue
+
+        # Exhaust the catalogue (ceil(10/6) = 2 calls gets all 10, but use 4 to be safe)
+        catalogue_ids = {s.story_id for s in sample_stories}
+        for _ in range(4):
+            eng.get_recommendations("u1")
+
+        assert profile.recommended_story_ids == catalogue_ids, (
+            "Catalogue should be fully exhausted before testing post-exhaustion cycling"
+        )
+
+        # Two consecutive calls with no interactions must surface different stories
+        call_a = eng.get_recommendations("u1")
+        call_b = eng.get_recommendations("u1")
+
+        assert set(call_a) != set(call_b), (
+            "Post-exhaustion calls should cycle through different stories, not repeat the same set"
+        )
+
     def test_all_stories_eventually_recommended(self, sample_stories) -> None:
         """Following recommendations should eventually surface every story."""
         profile = UserProfile(user_id="u1")
