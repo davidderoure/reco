@@ -96,6 +96,7 @@ recommender/
 main.py                   Entry point — real recommender service
 mock_server.py            Mock C# backend + browser test UI (see below)
 load_users.py             Synthetic load generator — 100 test users (see below)
+capacity_model.py         Persistence capacity estimator — volume & frequency (see below)
 config.py                 Environment-variable configuration
 tests/                    pytest test suite (200 tests)
 ```
@@ -207,6 +208,49 @@ python load_users.py --addr host:50051
 After running, switch between `load_user_001` … `load_user_100` in the browser
 UI's user selector to inspect individual Preference Weight profiles and see how
 the collaborative-filtering strategy groups similar users.
+
+### Persistence capacity estimator (`capacity_model.py`)
+
+`capacity_model.py` models the volume and frequency of `UserModel` state saves
+and loads between Python and the C# backend.  It is a standalone script with no
+server required — edit the **PARAMETERS** section at the top and run it to get
+four formatted tables instantly.
+
+```bash
+# Analytical tables only (no proto bindings needed)
+python capacity_model.py
+
+# With empirical proto measurement (run make proto first)
+make proto && python capacity_model.py
+```
+
+#### What the four tables show
+
+| Table | Shows |
+|---|---|
+| **1 — Per-user state size** | Estimated proto wire size for fresh / typical / mature user profiles |
+| **2 — Scale volumes** | Total state, save payload per flush, and startup load time across small / medium / large deployments |
+| **3 — Save bandwidth matrix** | Sustained bytes/sec for each deployment scale × flush interval combination |
+| **4 — Dirty-flag optimisation** | How much bandwidth a per-user dirty flag would save vs the current design (where all in-memory users are saved on every flush) |
+
+The empirical section constructs real `UserModelMessage` proto messages for each
+maturity band, serialises them, and compares the wire size against the analytical
+formula — a useful sanity check when the catalogue vocabulary or story-ID format
+changes.
+
+#### Key parameters to set before running
+
+| Parameter | Default | What to change it to |
+|---|---|---|
+| `N_STORIES` | `27` | Your production catalogue size |
+| `N_THEMES` / `N_TAGS` | `10` / `40` | Vocabulary sizes from your schema |
+| `AVG_STORY_ID_BYTES` | `8` | Length of your production story IDs |
+| `SCALES` | small / medium / large | Your target user counts |
+| `FLUSH_INTERVAL_S` | `60` | Match `STATE_PERSIST_INTERVAL_SECONDS` in config |
+| `RPC_LATENCY_MS` / `NETWORK_BW_MBPS` | `10` / `100` | Your network characteristics |
+
+`DIRTY_FRACTION` (default `1.0`) models the current "save all users on every
+flush" behaviour.  Lower it to see what a dirty-flag optimisation would save.
 
 ### With a real C# server
 
