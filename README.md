@@ -15,6 +15,63 @@ C# App Server ──gRPC──► Python Recommender (this repo)
 
 **Python also acts as a gRPC client** — it calls back to C# to fetch the story catalogue and persist/load user state.
 
+### Communication flow
+
+```mermaid
+sequenceDiagram
+    participant CS as C# App Server
+    participant PY as Python Recommender
+
+    Note over CS,PY: Startup
+
+    PY->>CS: GetStoryCatalogue()
+    CS-->>PY: stories (ids, titles, themes, tags)
+
+    PY->>CS: LoadUserModel(user_ids=[])
+    CS-->>PY: all persisted user models
+
+    Note over PY: Background threads start<br/>(catalogue refresh · state persist)
+    Note over PY: Ready to serve
+
+    Note over CS,PY: User interaction (fire-and-forget)
+
+    CS->>PY: UserReadStory(user_id, story_id, read_percent, ts)
+    PY-->>CS: Empty
+
+    CS->>PY: UserAnsweredQuestion(user_id, story_id, score 1–10, ts)
+    PY-->>CS: Empty
+
+    CS->>PY: UserProvidedMood(user_id, mood_score 1–10, ts [, story_id])
+    PY-->>CS: Empty
+
+    CS->>PY: UserBookmarkedStory(user_id, story_id, ts)
+    PY-->>CS: Empty
+
+    Note over CS,PY: Recommendation request
+
+    CS->>PY: GetRecommendations(user_id)
+    activate PY
+    Note right of PY: 4 strategies in parallel<br/>≤ 500 ms SLA
+    PY-->>CS: GetRecommendationsResponse (6 story_ids, ordered)
+    deactivate PY
+
+    Note over CS,PY: Background — every 60 s
+
+    PY->>CS: SaveUserModel(all in-memory user models)
+    CS-->>PY: Empty
+
+    Note over CS,PY: Background — every 300 s
+
+    PY->>CS: GetStoryCatalogue()
+    CS-->>PY: stories (refreshed)
+
+    Note over CS,PY: Shutdown (SIGTERM / SIGINT)
+
+    PY->>CS: SaveUserModel(all in-memory user models)
+    CS-->>PY: Empty
+    Note over PY: 5 s grace period, then exit
+```
+
 ### Recommendation slots (6 total)
 
 | # | Strategy | Algorithm |
