@@ -387,7 +387,7 @@ class InMemoryUserStateStore:
     Event dict schema::
 
         {
-            "event_type": str,          # "viewed"|"completed"|"scored"|"mood"
+            "event_type": str,          # "scored"|"mood"|"read_progress"|"bookmark"
             "story_id":   str,          # "" for mood events
             "score":      int,          # 0 when not applicable
             "timestamp_seconds": int,
@@ -599,21 +599,7 @@ def grpc_send_event(
     ts = _now_ts()
     try:
         stub = _get_recommender_stub()
-        if event_type == "viewed":
-            stub.UserViewedStory(
-                recommender_pb2.UserViewedStoryRequest(
-                    user_id=user_id, story_id=story_id, timestamp=ts
-                ),
-                timeout=3.0,
-            )
-        elif event_type == "completed":
-            stub.UserCompletedStory(
-                recommender_pb2.UserCompletedStoryRequest(
-                    user_id=user_id, story_id=story_id, timestamp=ts
-                ),
-                timeout=3.0,
-            )
-        elif event_type == "scored":
+        if event_type == "scored":
             stub.UserAnsweredQuestion(
                 recommender_pb2.UserAnsweredQuestionRequest(
                     user_id=user_id, story_id=story_id, score=score, timestamp=ts
@@ -768,14 +754,11 @@ class MockServerHTTPHandler(BaseHTTPRequestHandler):
             return
 
         # Validate
-        if event_type in ("viewed", "completed") and not story_id:
-            _send_error(self, f"story_id required for {event_type}")
+        if event_type == "scored" and (not story_id or not 1 <= score <= 10):
+            _send_error(self, "story_id and score 1-10 required for scored")
             return
-        if event_type == "scored" and (not story_id or not 1 <= score <= 5):
-            _send_error(self, "story_id and score 1-5 required for scored")
-            return
-        if event_type == "mood" and not 1 <= score <= 5:
-            _send_error(self, "score 1-5 required for mood")
+        if event_type == "mood" and not 1 <= score <= 10:
+            _send_error(self, "score 1-10 required for mood")
             return
         if event_type == "read_progress" and (not story_id or not 0 <= score <= 100):
             _send_error(self, "story_id and score 0-100 required for read_progress")
@@ -784,7 +767,7 @@ class MockServerHTTPHandler(BaseHTTPRequestHandler):
             _send_error(self, "story_id required for bookmark")
             return
         if event_type not in (
-            "viewed", "completed", "scored", "mood", "read_progress", "bookmark"
+            "scored", "mood", "read_progress", "bookmark"
         ):
             _send_error(self, f"Unknown event type: {event_type!r}")
             return
@@ -1092,8 +1075,6 @@ function storyCardHTML(story, showButtons) {
   let buttons   = '';
   if (showButtons) {
     buttons = `<div class="card-buttons">
-      <button class="btn" onclick="sendEvent('viewed','${sid}')">&#128214; View</button>
-      <button class="btn" onclick="sendEvent('completed','${sid}')">&#9989; Complete</button>
       <button class="btn" onclick="promptScore('${sid}')">&#11088; Score</button>
       <button class="btn" onclick="promptMood()">&#128149; Mood</button>
       <button class="btn" onclick="promptReadProgress('${sid}')">&#128336; Read%</button>
@@ -1215,17 +1196,17 @@ function sendEvent(type, storyId, score) {
 }
 
 function promptScore(storyId) {
-  const s = prompt('Rate this story (1 = poor \\u2192 5 = excellent):');
+  const s = prompt('Rate this story (1 = poor \\u2192 10 = excellent):');
   const score = parseInt(s, 10);
-  if (score >= 1 && score <= 5) sendEvent('scored', storyId, score);
-  else if (s !== null) alert('Please enter a number between 1 and 5.');
+  if (score >= 1 && score <= 10) sendEvent('scored', storyId, score);
+  else if (s !== null) alert('Please enter a number between 1 and 10.');
 }
 
 function promptMood() {
-  const s = prompt('How are you feeling right now? (1 = very low \\u2192 5 = great):');
+  const s = prompt('How are you feeling right now? (1 = very low \\u2192 10 = great):');
   const score = parseInt(s, 10);
-  if (score >= 1 && score <= 5) sendEvent('mood', '', score);
-  else if (s !== null) alert('Please enter a number between 1 and 5.');
+  if (score >= 1 && score <= 10) sendEvent('mood', '', score);
+  else if (s !== null) alert('Please enter a number between 1 and 10.');
 }
 
 function promptReadProgress(storyId) {
@@ -1291,9 +1272,8 @@ function weightsFromEvents(events) {
     const story = storyMap[e.story_id];
     if (!story) continue;
     let delta = 0;
-    if (e.event_type === 'viewed')    delta = 1.0;
-    if (e.event_type === 'completed') delta = 2.0;
-    if (e.event_type === 'scored')    delta = (e.score - 3) * 0.5;
+    if (e.event_type === 'read_progress' && e.score >= 50) delta = 1.0;
+    if (e.event_type === 'scored') delta = (e.score - 5) * 0.25;
     if (delta === 0) continue;
     for (const t of story.themes) themeW[t] = (themeW[t] || 0) + delta;
     for (const t of story.tags)   tagW[t]   = (tagW[t]   || 0) + delta;

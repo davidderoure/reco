@@ -310,7 +310,7 @@ class TestProgressiveCoverage:
             )
 
     def test_skip_count_resets_on_view(self, sample_stories) -> None:
-        """Viewing a story resets its skip count to zero (story returns to Tier 1a)."""
+        """Viewing a story (via read_progress ≥50%) resets its skip count."""
         profile = UserProfile(user_id="u1")
         eng = _make_engine(sample_stories, [profile])
 
@@ -318,9 +318,11 @@ class TestProgressiveCoverage:
         viewed_sid = result[0]
         assert profile.skip_counts.get(viewed_sid, 0) == 1  # count was incremented
 
-        # Record view through the store — this should clear the skip count
+        # Record view via read_progress ≥ 50% — this should clear the skip count
         from datetime import datetime, timezone as tz
-        eng._user_state_store.record_viewed("u1", viewed_sid, datetime.now(tz.utc))
+        eng._user_state_store.record_read_progress(
+            "u1", viewed_sid, 50, datetime.now(tz.utc)
+        )
 
         assert viewed_sid not in profile.skip_counts, (
             f"Expected skip_counts to not contain {viewed_sid!r} after viewing"
@@ -430,7 +432,7 @@ class TestMoodSlotAllocation:
         assert allocation["_wildcard_strategy"] == 2
 
     def test_all_allocations_sum_to_six(self) -> None:
-        for mood_level in (None, 1.0, _MOOD_LOW_THRESHOLD, 3.0, _MOOD_HIGH_THRESHOLD, 5.0):
+        for mood_level in (None, 1.0, _MOOD_LOW_THRESHOLD, 5.5, _MOOD_HIGH_THRESHOLD, 10.0):
             alloc = _mood_slot_allocation(mood_level)
             assert sum(n for _, n in alloc) == 6, f"Allocation for mood={mood_level} does not sum to 6"
 
@@ -474,7 +476,7 @@ class TestMoodResponsiveRecommendations:
     def test_high_mood_produces_recommendations(self) -> None:
         """High-mood user gets 6 recommendations with broader exploration."""
         stories = self._sample_stories()
-        profile = UserProfile(user_id="u1", mood_scores=[(_TS, 5)])
+        profile = UserProfile(user_id="u1", mood_scores=[(_TS, 9)])  # 9 > _MOOD_HIGH_THRESHOLD (7.0)
         eng = _make_engine(stories, [profile])
         result = eng.get_recommendations("u1")
         assert len(result) == 6

@@ -16,22 +16,33 @@ logger = logging.getLogger(__name__)
 # Weight deltas applied when processing events
 _WEIGHT_VIEW = 1.0
 _WEIGHT_COMPLETE_BONUS = 2.0  # additive with view weight
-_WEIGHT_SCORE_FACTOR = 0.5   # (score - 3) * factor
+_WEIGHT_SCORE_FACTOR = 0.25   # (score - _SCORE_NEUTRAL) * factor; adjusted for 1-10 scale
+_SCORE_NEUTRAL = 5            # neutral midpoint on 1-10 score scale (score 5 → zero weight delta)
 
 # Maximum number of mood entries to keep in memory and persist.
 MOOD_HISTORY_LIMIT = 50
 
 # Mood attribution: when mood changes, a fraction of the weight accumulated
 # since the previous mood event is re-applied as a boost (positive delta) or
-# dampening (negative delta).  0.5 means a full 4-point improvement adds at
+# dampening (negative delta).  0.5 means a full 9-point improvement adds at
 # most half a "viewed" event worth of weight per theme/tag.
 MOOD_ATTRIBUTION_FACTOR = 0.5
+
+# Maximum possible mood delta on the 1–10 scale (10 − 1 = 9).
+# Used to normalise the attribution formula so a full-range swing produces
+# the same maximum attribution as on the previous 1–5 scale.
+_MOOD_MAX_DELTA = 9.0
 
 # A read-progress event whose read_percent meets or exceeds this threshold is
 # treated as a "viewed" event: the story receives the standard view weight delta
 # and is added to viewed_story_ids.  Repeated events above the threshold are
 # idempotent — the weight is only applied once.
 READ_VIEWED_THRESHOLD_PERCENT = 50
+
+# A read-progress event at exactly this threshold (100%) is treated as a
+# "completed" event: the story receives the completion bonus weight delta
+# and is added to completed_story_ids.  Idempotent.
+READ_COMPLETED_THRESHOLD_PERCENT = 100
 
 
 class UserStateStore:
@@ -191,73 +202,31 @@ class UserStateStore:
     # Event recording
     # ------------------------------------------------------------------
 
-    def record_viewed(self, user_id: str, story_id: str, timestamp: datetime) -> None:
-        """Record that *user_id* viewed *story_id* and update preference weights.
-
-        Adds ``+1.0`` to each theme/tag weight for the story.
-
-        Args:
-            user_id: The viewing user.
-            story_id: The story that was viewed.
-            timestamp: When the event occurred.
-        """
-        with self._lock:
-            profile = self.get_or_create_profile(user_id)
-            profile.viewed_story_ids.add(story_id)
-            profile.skip_counts.pop(story_id, None)
-            story = self._catalogue.get_story(story_id)
-            if story:
-                self._apply_weight_delta(profile, story, _WEIGHT_VIEW)
-                self._accumulate_mood_window(profile, story, _WEIGHT_VIEW)
-
-    def record_completed(self, user_id: str, story_id: str, timestamp: datetime) -> None:
-        """Record that *user_id* completed *story_id* and update preference weights.
-
-        Adds a ``+2.0`` bonus to each theme/tag weight (additive with the
-        view weight, so a completed story contributes +3.0 total if both
-        events are received).
-
-        Also adds *story_id* to :attr:`~recommender.models.UserProfile.completed_story_ids`.
-
-        Args:
-            user_id: The user who completed the story.
-            story_id: The story that was completed.
-            timestamp: When the event occurred.
-        """
-        with self._lock:
-            profile = self.get_or_create_profile(user_id)
-            profile.completed_story_ids.add(story_id)
-            profile.skip_counts.pop(story_id, None)
-            story = self._catalogue.get_story(story_id)
-            if story:
-                self._apply_weight_delta(profile, story, _WEIGHT_COMPLETE_BONUS)
-                self._accumulate_mood_window(profile, story, _WEIGHT_COMPLETE_BONUS)
-
     def record_scored(
         self, user_id: str, story_id: str, score: int, timestamp: datetime
     ) -> None:
         """Record the user's end-of-story rating and update preference weights.
 
-        Applies a weight delta of ``(score - 3) × 0.5`` per theme/tag.
-        Score 3 is neutral (no change), 4–5 boost weights, 1–2 penalise.
+        Applies a weight delta of ``(score - 5) × 0.25`` per theme/tag.
+        Score 5 is neutral (no change), 6–10 boost weights, 1–4 penalise.
 
         Args:
             user_id: The rating user.
             story_id: The rated story.
-            score: Integer in [1, 5].
+            score: Integer in [1, 10].
             timestamp: When the event occurred.
 
         Raises:
-            ValueError: If *score* is outside [1, 5].
+            ValueError: If *score* is outside [1, 10].
         """
-        if not 1 <= score <= 5:
-            raise ValueError(f"Score must be between 1 and 5, got {score!r}")
+        if not 1 <= score <= 10:
+            raise ValueError(f"Score must be between 1 and 10, got {score!r}")
         with self._lock:
             profile = self.get_or_create_profile(user_id)
             profile.story_scores[story_id] = score
             story = self._catalogue.get_story(story_id)
             if story:
-                delta = (score - 3) * _WEIGHT_SCORE_FACTOR
+                delta = (score - _SCORE_NEUTRAL) * _WEIGHT_SCORE_FACTOR
                 self._apply_weight_delta(profile, story, delta)
 
     def record_read_progress(
@@ -265,13 +234,24 @@ class UserStateStore:
     ) -> None:
         """Record how far through a story the user has read.
 
-        If *read_percent* is at or above :data:`READ_VIEWED_THRESHOLD_PERCENT`
-        and the story has not already been recorded as viewed, the standard
-        view weight delta is applied and the story is added to
-        :attr:`~recommender.models.UserProfile.viewed_story_ids`.  Repeated
-        calls above the threshold are idempotent — weights are only applied
-        once.  Events below the threshold are a no-op for the recommendation
-        engine.
+        Two inferred events are derived from *read_percent*:
+
+        * **Viewed** — if *read_percent* is at or above
+          :data:`READ_VIEWED_THRESHOLD_PERCENT` (50) and the story has not
+          already been recorded as viewed, the standard view weight delta is
+          applied and the story is added to
+          :attr:`~recommender.models.UserProfile.viewed_story_ids`.
+          Idempotent once the threshold is reached.
+
+        * **Completed** — if *read_percent* reaches
+          :data:`READ_COMPLETED_THRESHOLD_PERCENT` (100) and the story has not
+          already been recorded as completed, the completion bonus weight delta
+          is applied and the story is added to
+          :attr:`~recommender.models.UserProfile.completed_story_ids`.
+          Idempotent once 100% is reached.
+
+        Events below the viewed threshold are a no-op for the recommendation
+        engine (progress is not recorded separately).
 
         Args:
             user_id: The user.
@@ -288,17 +268,36 @@ class UserStateStore:
             )
         with self._lock:
             profile = self.get_or_create_profile(user_id)
+            story = self._catalogue.get_story(story_id)
+
+            # Infer "viewed" from read_percent >= 50%
             if (
                 read_percent >= READ_VIEWED_THRESHOLD_PERCENT
                 and story_id not in profile.viewed_story_ids
             ):
                 profile.viewed_story_ids.add(story_id)
                 profile.skip_counts.pop(story_id, None)
-                story = self._catalogue.get_story(story_id)
                 if story:
                     self._apply_weight_delta(profile, story, _WEIGHT_VIEW)
+                    self._accumulate_mood_window(profile, story, _WEIGHT_VIEW)
 
-    def record_mood(self, user_id: str, mood_score: int, timestamp: datetime) -> None:
+            # Infer "completed" from read_percent == 100%
+            if (
+                read_percent >= READ_COMPLETED_THRESHOLD_PERCENT
+                and story_id not in profile.completed_story_ids
+            ):
+                profile.completed_story_ids.add(story_id)
+                if story:
+                    self._apply_weight_delta(profile, story, _WEIGHT_COMPLETE_BONUS)
+                    self._accumulate_mood_window(profile, story, _WEIGHT_COMPLETE_BONUS)
+
+    def record_mood(
+        self,
+        user_id: str,
+        mood_score: int,
+        timestamp: datetime,
+        story_id: str | None = None,
+    ) -> None:
         """Record the user's current mood score and apply attribution feedback.
 
         Mood is stored in :attr:`~recommender.models.UserProfile.mood_scores`
@@ -307,28 +306,38 @@ class UserStateStore:
         **Attribution**: the change in mood relative to the previous recorded
         mood is used to adjust theme/tag weights for content engaged with since
         that prior event.  A mood improvement boosts those weights by
-        ``MOOD_ATTRIBUTION_FACTOR × (delta / 4)`` of the accumulated delta; a
+        ``MOOD_ATTRIBUTION_FACTOR × (delta / 9)`` of the accumulated delta; a
         mood decline dampens them by the same fraction (capped at 0).  The
         transient accumulators are reset after each mood event.
 
+        **Optional story association**: if *story_id* is supplied (e.g. when
+        the mood prompt appears at the end of a story), the story's skip count
+        is reset, indicating the user engaged with it fully enough to trigger
+        the end-of-story screen.
+
         Args:
             user_id: The user.
-            mood_score: Integer in [1, 5].
+            mood_score: Integer in [1, 10].
             timestamp: When the event occurred.
+            story_id: Optional story associated with this mood event.
 
         Raises:
-            ValueError: If *mood_score* is outside [1, 5].
+            ValueError: If *mood_score* is outside [1, 10].
         """
-        if not 1 <= mood_score <= 5:
-            raise ValueError(f"Mood score must be between 1 and 5, got {mood_score!r}")
+        if not 1 <= mood_score <= 10:
+            raise ValueError(f"Mood score must be between 1 and 10, got {mood_score!r}")
         with self._lock:
             profile = self.get_or_create_profile(user_id)
+
+            # Reset skip count for the associated story (user reached end-of-story screen)
+            if story_id:
+                profile.skip_counts.pop(story_id, None)
 
             # Apply attribution: boost/dampen themes & tags engaged since last mood
             if profile.last_mood_score is not None:
                 mood_delta = mood_score - profile.last_mood_score
                 if mood_delta != 0:
-                    attribution = (mood_delta / 4) * MOOD_ATTRIBUTION_FACTOR
+                    attribution = (mood_delta / _MOOD_MAX_DELTA) * MOOD_ATTRIBUTION_FACTOR
                     for theme, w in profile.themes_since_last_mood.items():
                         profile.theme_weights[theme] = max(
                             0.0,

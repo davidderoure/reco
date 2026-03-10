@@ -51,61 +51,6 @@ def _make_servicer(
 
 
 # ---------------------------------------------------------------------------
-# UserViewedStory tests
-# ---------------------------------------------------------------------------
-
-
-class TestUserViewedStory:
-    def test_calls_record_viewed(self) -> None:
-        servicer = _make_servicer()
-        request = MagicMock(user_id="u1", story_id="s1", timestamp=_make_ts())
-        ctx = _make_context()
-        servicer.UserViewedStory(request, ctx)
-        servicer._store.record_viewed.assert_called_once()
-        call_args = servicer._store.record_viewed.call_args[0]
-        assert call_args[0] == "u1"
-        assert call_args[1] == "s1"
-        assert isinstance(call_args[2], datetime)
-
-    def test_returns_empty(self) -> None:
-        from google.protobuf.empty_pb2 import Empty
-        servicer = _make_servicer()
-        request = MagicMock(user_id="u1", story_id="s1", timestamp=_make_ts())
-        result = servicer.UserViewedStory(request, _make_context())
-        assert isinstance(result, Empty)
-
-    def test_store_error_sets_internal_status(self) -> None:
-        servicer = _make_servicer()
-        servicer._store.record_viewed.side_effect = RuntimeError("db error")
-        request = MagicMock(user_id="u1", story_id="s1", timestamp=_make_ts())
-        ctx = _make_context()
-        servicer.UserViewedStory(request, ctx)
-        ctx.set_code.assert_called_once_with(grpc.StatusCode.INTERNAL)
-
-
-# ---------------------------------------------------------------------------
-# UserCompletedStory tests
-# ---------------------------------------------------------------------------
-
-
-class TestUserCompletedStory:
-    def test_calls_record_completed(self) -> None:
-        servicer = _make_servicer()
-        request = MagicMock(user_id="u1", story_id="s1", timestamp=_make_ts())
-        ctx = _make_context()
-        servicer.UserCompletedStory(request, ctx)
-        servicer._store.record_completed.assert_called_once()
-
-    def test_store_error_sets_internal_status(self) -> None:
-        servicer = _make_servicer()
-        servicer._store.record_completed.side_effect = RuntimeError("error")
-        request = MagicMock(user_id="u1", story_id="s1", timestamp=_make_ts())
-        ctx = _make_context()
-        servicer.UserCompletedStory(request, ctx)
-        ctx.set_code.assert_called_once_with(grpc.StatusCode.INTERNAL)
-
-
-# ---------------------------------------------------------------------------
 # UserAnsweredQuestion tests
 # ---------------------------------------------------------------------------
 
@@ -113,17 +58,17 @@ class TestUserCompletedStory:
 class TestUserAnsweredQuestion:
     def test_calls_record_scored(self) -> None:
         servicer = _make_servicer()
-        request = MagicMock(user_id="u1", story_id="s1", score=4, timestamp=_make_ts())
+        request = MagicMock(user_id="u1", story_id="s1", score=8, timestamp=_make_ts())
         ctx = _make_context()
         servicer.UserAnsweredQuestion(request, ctx)
         servicer._store.record_scored.assert_called_once()
         call_args = servicer._store.record_scored.call_args[0]
-        assert call_args[2] == 4
+        assert call_args[2] == 8
 
     def test_invalid_score_sets_invalid_argument(self) -> None:
         servicer = _make_servicer()
         servicer._store.record_scored.side_effect = ValueError("Score out of range")
-        request = MagicMock(user_id="u1", story_id="s1", score=6, timestamp=_make_ts())
+        request = MagicMock(user_id="u1", story_id="s1", score=11, timestamp=_make_ts())
         ctx = _make_context()
         servicer.UserAnsweredQuestion(request, ctx)
         ctx.set_code.assert_called_with(grpc.StatusCode.INVALID_ARGUMENT)
@@ -131,7 +76,7 @@ class TestUserAnsweredQuestion:
     def test_internal_error_sets_internal_status(self) -> None:
         servicer = _make_servicer()
         servicer._store.record_scored.side_effect = RuntimeError("crash")
-        request = MagicMock(user_id="u1", story_id="s1", score=4, timestamp=_make_ts())
+        request = MagicMock(user_id="u1", story_id="s1", score=8, timestamp=_make_ts())
         ctx = _make_context()
         servicer.UserAnsweredQuestion(request, ctx)
         ctx.set_code.assert_called_with(grpc.StatusCode.INTERNAL)
@@ -145,17 +90,35 @@ class TestUserAnsweredQuestion:
 class TestUserProvidedMood:
     def test_calls_record_mood(self) -> None:
         servicer = _make_servicer()
-        request = MagicMock(user_id="u1", mood_score=3, timestamp=_make_ts())
+        request = MagicMock(user_id="u1", mood_score=7, story_id="", timestamp=_make_ts())
         ctx = _make_context()
         servicer.UserProvidedMood(request, ctx)
         servicer._store.record_mood.assert_called_once()
         call_args = servicer._store.record_mood.call_args[0]
-        assert call_args[1] == 3
+        assert call_args[1] == 7
+
+    def test_story_id_forwarded_when_provided(self) -> None:
+        """When story_id is set, it is forwarded as a keyword arg to record_mood."""
+        servicer = _make_servicer()
+        request = MagicMock(user_id="u1", mood_score=8, story_id="s1", timestamp=_make_ts())
+        ctx = _make_context()
+        servicer.UserProvidedMood(request, ctx)
+        call_kwargs = servicer._store.record_mood.call_args[1]
+        assert call_kwargs.get("story_id") == "s1"
+
+    def test_empty_story_id_becomes_none(self) -> None:
+        """An empty proto string story_id is converted to None before forwarding."""
+        servicer = _make_servicer()
+        request = MagicMock(user_id="u1", mood_score=5, story_id="", timestamp=_make_ts())
+        ctx = _make_context()
+        servicer.UserProvidedMood(request, ctx)
+        call_kwargs = servicer._store.record_mood.call_args[1]
+        assert call_kwargs.get("story_id") is None
 
     def test_invalid_mood_sets_invalid_argument(self) -> None:
         servicer = _make_servicer()
         servicer._store.record_mood.side_effect = ValueError("Mood out of range")
-        request = MagicMock(user_id="u1", mood_score=0, timestamp=_make_ts())
+        request = MagicMock(user_id="u1", mood_score=0, story_id="", timestamp=_make_ts())
         ctx = _make_context()
         servicer.UserProvidedMood(request, ctx)
         ctx.set_code.assert_called_with(grpc.StatusCode.INVALID_ARGUMENT)
@@ -322,8 +285,6 @@ class TestUserBookmarkedStory:
         servicer = _make_servicer()
         request = MagicMock(user_id="u1", story_id="s1", timestamp=_make_ts())
         servicer.UserBookmarkedStory(request, _make_context())
-        servicer._store.record_viewed.assert_not_called()
-        servicer._store.record_completed.assert_not_called()
         servicer._store.record_scored.assert_not_called()
         servicer._store.record_mood.assert_not_called()
         servicer._store.record_read_progress.assert_not_called()

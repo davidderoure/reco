@@ -23,8 +23,8 @@ _SLOT_ALLOCATION = [
 _TOTAL_SLOTS = 6
 
 # Mood-responsive slot allocation thresholds and recency window
-_MOOD_LOW_THRESHOLD = 2.5   # average ≤ this → comfort-zone allocation
-_MOOD_HIGH_THRESHOLD = 3.5  # average ≥ this → exploratory allocation
+_MOOD_LOW_THRESHOLD = 4.0   # average ≤ this → comfort-zone allocation  (1-10 scale)
+_MOOD_HIGH_THRESHOLD = 7.0  # average ≥ this → exploratory allocation   (1-10 scale)
 _MOOD_RECENCY_N = 5         # number of most-recent mood entries to average
 
 # Skip-count threshold: a story recommended more than this many times without
@@ -40,7 +40,7 @@ def _recent_mood_level(profile: UserProfile) -> float | None:
         profile: The user profile.
 
     Returns:
-        Float in [1.0, 5.0] or ``None`` if no mood data exists.
+        Float in [1.0, 10.0] or ``None`` if no mood data exists.
     """
     if not profile.mood_scores:
         return None

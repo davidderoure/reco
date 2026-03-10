@@ -17,12 +17,15 @@ from recommender.user_state import (
     MOOD_ATTRIBUTION_FACTOR,
     MOOD_HISTORY_LIMIT,
     READ_VIEWED_THRESHOLD_PERCENT,
+    READ_COMPLETED_THRESHOLD_PERCENT,
     UserStateStore,
     _datetime_to_timestamp,
     _timestamp_to_datetime,
     _WEIGHT_VIEW,
     _WEIGHT_COMPLETE_BONUS,
     _WEIGHT_SCORE_FACTOR,
+    _SCORE_NEUTRAL,
+    _MOOD_MAX_DELTA,
 )
 
 
@@ -56,84 +59,16 @@ STORY_MULTI = Story("s3", "Dual Tale", ["adventure", "mystery"], ["treasure"])
 
 
 # ---------------------------------------------------------------------------
-# Weight accumulation tests
+# Scored event tests
 # ---------------------------------------------------------------------------
-
-
-class TestRecordViewed:
-    def test_adds_view_weight_to_themes(self) -> None:
-        store = _make_store(STORY_ADV)
-        store.record_viewed("u1", "s1", TS)
-        profile = store.get_or_create_profile("u1")
-        assert profile.theme_weights["adventure"] == pytest.approx(_WEIGHT_VIEW)
-
-    def test_adds_view_weight_to_tags(self) -> None:
-        store = _make_store(STORY_ADV)
-        store.record_viewed("u1", "s1", TS)
-        profile = store.get_or_create_profile("u1")
-        assert profile.tag_weights["pirates"] == pytest.approx(_WEIGHT_VIEW)
-        assert profile.tag_weights["ocean"] == pytest.approx(_WEIGHT_VIEW)
-
-    def test_marks_story_as_viewed(self) -> None:
-        store = _make_store(STORY_ADV)
-        store.record_viewed("u1", "s1", TS)
-        profile = store.get_or_create_profile("u1")
-        assert "s1" in profile.viewed_story_ids
-
-    def test_multiple_views_accumulate(self) -> None:
-        store = _make_store(STORY_ADV, STORY_MYS)
-        store.record_viewed("u1", "s1", TS)
-        store.record_viewed("u1", "s2", TS)
-        profile = store.get_or_create_profile("u1")
-        assert profile.theme_weights["adventure"] == pytest.approx(_WEIGHT_VIEW)
-        assert profile.theme_weights["mystery"] == pytest.approx(_WEIGHT_VIEW)
-
-    def test_unknown_story_does_not_crash(self) -> None:
-        store = _make_store()
-        store.record_viewed("u1", "nonexistent", TS)
-        profile = store.get_or_create_profile("u1")
-        assert "nonexistent" in profile.viewed_story_ids
-        assert profile.theme_weights == {}
-
-    def test_multi_theme_story(self) -> None:
-        store = _make_store(STORY_MULTI)
-        store.record_viewed("u1", "s3", TS)
-        profile = store.get_or_create_profile("u1")
-        assert profile.theme_weights["adventure"] == pytest.approx(_WEIGHT_VIEW)
-        assert profile.theme_weights["mystery"] == pytest.approx(_WEIGHT_VIEW)
-        assert profile.tag_weights["treasure"] == pytest.approx(_WEIGHT_VIEW)
-
-
-class TestRecordCompleted:
-    def test_adds_complete_bonus_to_themes(self) -> None:
-        store = _make_store(STORY_ADV)
-        store.record_completed("u1", "s1", TS)
-        profile = store.get_or_create_profile("u1")
-        assert profile.theme_weights["adventure"] == pytest.approx(_WEIGHT_COMPLETE_BONUS)
-
-    def test_marks_story_as_completed(self) -> None:
-        store = _make_store(STORY_ADV)
-        store.record_completed("u1", "s1", TS)
-        profile = store.get_or_create_profile("u1")
-        assert "s1" in profile.completed_story_ids
-
-    def test_view_plus_complete_accumulates(self) -> None:
-        """Viewing then completing a story gives WEIGHT_VIEW + WEIGHT_COMPLETE_BONUS."""
-        store = _make_store(STORY_ADV)
-        store.record_viewed("u1", "s1", TS)
-        store.record_completed("u1", "s1", TS)
-        profile = store.get_or_create_profile("u1")
-        expected = _WEIGHT_VIEW + _WEIGHT_COMPLETE_BONUS
-        assert profile.theme_weights["adventure"] == pytest.approx(expected)
 
 
 class TestRecordScored:
     @pytest.mark.parametrize("score,expected_delta", [
-        (5, (5 - 3) * _WEIGHT_SCORE_FACTOR),   # +1.0
-        (4, (4 - 3) * _WEIGHT_SCORE_FACTOR),   # +0.5
-        (3, (3 - 3) * _WEIGHT_SCORE_FACTOR),   # 0.0
-        (2, (2 - 3) * _WEIGHT_SCORE_FACTOR),   # -0.5
-        (1, (1 - 3) * _WEIGHT_SCORE_FACTOR),   # -1.0
+        (1,  (1  - _SCORE_NEUTRAL) * _WEIGHT_SCORE_FACTOR),   # -1.0
+        (5,  (5  - _SCORE_NEUTRAL) * _WEIGHT_SCORE_FACTOR),   #  0.0 (neutral)
+        (9,  (9  - _SCORE_NEUTRAL) * _WEIGHT_SCORE_FACTOR),   # +1.0
+        (10, (10 - _SCORE_NEUTRAL) * _WEIGHT_SCORE_FACTOR),   # +1.25
     ])
     def test_score_weight_delta(self, score: int, expected_delta: float) -> None:
         store = _make_store(STORY_ADV)
@@ -143,31 +78,37 @@ class TestRecordScored:
 
     def test_stores_score_in_story_scores(self) -> None:
         store = _make_store(STORY_ADV)
-        store.record_scored("u1", "s1", 4, TS)
+        store.record_scored("u1", "s1", 8, TS)
         profile = store.get_or_create_profile("u1")
-        assert profile.story_scores["s1"] == 4
+        assert profile.story_scores["s1"] == 8
 
     def test_latest_score_overwrites(self) -> None:
         store = _make_store(STORY_ADV)
-        store.record_scored("u1", "s1", 4, TS)
-        store.record_scored("u1", "s1", 2, TS)
+        store.record_scored("u1", "s1", 8, TS)
+        store.record_scored("u1", "s1", 3, TS)
         profile = store.get_or_create_profile("u1")
-        assert profile.story_scores["s1"] == 2
+        assert profile.story_scores["s1"] == 3
 
     def test_invalid_score_raises(self) -> None:
         store = _make_store(STORY_ADV)
         with pytest.raises(ValueError):
             store.record_scored("u1", "s1", 0, TS)
         with pytest.raises(ValueError):
-            store.record_scored("u1", "s1", 6, TS)
+            store.record_scored("u1", "s1", 11, TS)
 
-    def test_view_and_score_5_accumulates(self) -> None:
-        """View (+1.0) then score 5 (+1.0) = total +2.0."""
+    def test_read_progress_and_score_accumulates(self) -> None:
+        """Read ≥50% (+1.0) then score 9 (+1.0) = total +2.0."""
         store = _make_store(STORY_ADV)
-        store.record_viewed("u1", "s1", TS)
-        store.record_scored("u1", "s1", 5, TS)
+        store.record_read_progress("u1", "s1", 50, TS)
+        store.record_scored("u1", "s1", 9, TS)
         profile = store.get_or_create_profile("u1")
-        assert profile.theme_weights["adventure"] == pytest.approx(2.0)
+        expected = _WEIGHT_VIEW + (9 - _SCORE_NEUTRAL) * _WEIGHT_SCORE_FACTOR
+        assert profile.theme_weights["adventure"] == pytest.approx(expected)
+
+
+# ---------------------------------------------------------------------------
+# Mood event tests
+# ---------------------------------------------------------------------------
 
 
 class TestRecordMood:
@@ -182,7 +123,7 @@ class TestRecordMood:
         store = _make_store()
         ts2 = datetime(2024, 6, 2, tzinfo=timezone.utc)
         store.record_mood("u1", 3, TS)
-        store.record_mood("u1", 5, ts2)
+        store.record_mood("u1", 8, ts2)
         profile = store.get_or_create_profile("u1")
         assert len(profile.mood_scores) == 2
 
@@ -197,14 +138,24 @@ class TestRecordMood:
         with pytest.raises(ValueError):
             store.record_mood("u1", 0, TS)
         with pytest.raises(ValueError):
-            store.record_mood("u1", 6, TS)
+            store.record_mood("u1", 11, TS)
 
     def test_mood_history_capped_at_limit(self) -> None:
         store = _make_store()
         for i in range(MOOD_HISTORY_LIMIT + 10):
-            store.record_mood("u1", (i % 5) + 1, TS)
+            store.record_mood("u1", (i % 10) + 1, TS)
         profile = store.get_or_create_profile("u1")
         assert len(profile.mood_scores) == MOOD_HISTORY_LIMIT
+
+    def test_story_id_resets_skip_count(self) -> None:
+        """When story_id is provided, the story's skip count is reset."""
+        store = _make_store(STORY_ADV)
+        profile = store.get_or_create_profile("u1")
+        profile.skip_counts["s1"] = 3  # simulate previous skips
+
+        store.record_mood("u1", 7, TS, story_id="s1")
+
+        assert "s1" not in profile.skip_counts
 
 
 # ---------------------------------------------------------------------------
@@ -227,11 +178,13 @@ class TestRecordReadProgress:
         assert "s1" in profile.viewed_story_ids
         assert profile.theme_weights["adventure"] == pytest.approx(_WEIGHT_VIEW)
 
-    def test_above_threshold_marks_viewed(self) -> None:
+    def test_above_threshold_but_below_100_marks_viewed_only(self) -> None:
+        """Read at 75% marks as viewed but not completed."""
         store = _make_store(STORY_ADV)
-        store.record_read_progress("u1", "s1", 100, TS)
+        store.record_read_progress("u1", "s1", 75, TS)
         profile = store.get_or_create_profile("u1")
         assert "s1" in profile.viewed_story_ids
+        assert "s1" not in profile.completed_story_ids
         assert profile.theme_weights["adventure"] == pytest.approx(_WEIGHT_VIEW)
 
     def test_idempotent_above_threshold(self) -> None:
@@ -242,14 +195,14 @@ class TestRecordReadProgress:
         profile = store.get_or_create_profile("u1")
         assert profile.theme_weights["adventure"] == pytest.approx(_WEIGHT_VIEW)
 
-    def test_already_viewed_not_double_counted(self) -> None:
-        """Story already in viewed_story_ids gets no extra weight delta."""
+    def test_viewed_not_double_counted_on_subsequent_above_threshold(self) -> None:
+        """Second above-threshold event does not re-apply view weight."""
         store = _make_store(STORY_ADV)
-        store.record_viewed("u1", "s1", TS)
-        weight_before = store.get_or_create_profile("u1").theme_weights["adventure"]
-        store.record_read_progress("u1", "s1", 100, TS)
+        store.record_read_progress("u1", "s1", 50, TS)
+        weight_after_first = store.get_or_create_profile("u1").theme_weights["adventure"]
+        store.record_read_progress("u1", "s1", 75, TS)
         profile = store.get_or_create_profile("u1")
-        assert profile.theme_weights["adventure"] == pytest.approx(weight_before)
+        assert profile.theme_weights["adventure"] == pytest.approx(weight_after_first)
 
     def test_invalid_read_percent_raises(self) -> None:
         store = _make_store()
@@ -273,6 +226,63 @@ class TestRecordReadProgress:
         assert profile.tag_weights["pirates"] == pytest.approx(_WEIGHT_VIEW)
         assert profile.tag_weights["ocean"] == pytest.approx(_WEIGHT_VIEW)
 
+    # --- Completion inference (read_percent == 100) ---
+
+    def test_read_100_marks_completed(self) -> None:
+        """read_percent=100 adds the story to completed_story_ids."""
+        store = _make_store(STORY_ADV)
+        store.record_read_progress("u1", "s1", 100, TS)
+        profile = store.get_or_create_profile("u1")
+        assert "s1" in profile.completed_story_ids
+
+    def test_read_100_also_marks_viewed(self) -> None:
+        """read_percent=100 marks the story as viewed as well as completed."""
+        store = _make_store(STORY_ADV)
+        store.record_read_progress("u1", "s1", 100, TS)
+        profile = store.get_or_create_profile("u1")
+        assert "s1" in profile.viewed_story_ids
+
+    def test_read_100_applies_view_and_complete_bonus(self) -> None:
+        """read_percent=100 applies both the view weight and the completion bonus."""
+        store = _make_store(STORY_ADV)
+        store.record_read_progress("u1", "s1", 100, TS)
+        profile = store.get_or_create_profile("u1")
+        expected = _WEIGHT_VIEW + _WEIGHT_COMPLETE_BONUS
+        assert profile.theme_weights["adventure"] == pytest.approx(expected)
+
+    def test_read_100_idempotent(self) -> None:
+        """A second read_percent=100 does not re-apply the completion bonus."""
+        store = _make_store(STORY_ADV)
+        store.record_read_progress("u1", "s1", 100, TS)
+        weight_after_first = store.get_or_create_profile("u1").theme_weights["adventure"]
+        store.record_read_progress("u1", "s1", 100, TS)
+        profile = store.get_or_create_profile("u1")
+        assert profile.theme_weights["adventure"] == pytest.approx(weight_after_first)
+
+    def test_read_100_only_applies_complete_bonus_if_already_viewed(self) -> None:
+        """If the story was already viewed at 50%, read_percent=100 adds only the completion bonus."""
+        store = _make_store(STORY_ADV)
+        store.record_read_progress("u1", "s1", 50, TS)  # view weight applied here
+        weight_after_view = store.get_or_create_profile("u1").theme_weights["adventure"]
+
+        store.record_read_progress("u1", "s1", 100, TS)  # only complete bonus added
+        profile = store.get_or_create_profile("u1")
+        assert profile.theme_weights["adventure"] == pytest.approx(
+            weight_after_view + _WEIGHT_COMPLETE_BONUS
+        )
+
+    def test_read_100_accumulates_mood_window(self) -> None:
+        """read_percent=100 accumulates the complete bonus in the mood attribution window."""
+        store = _make_store(STORY_ADV)
+        store.record_read_progress("u1", "s1", 50, TS)   # view (resets window after mood)
+        store.record_mood("u1", 3, TS)                   # start fresh mood window
+        store.record_read_progress("u1", "s1", 100, TS)  # complete (view idempotent)
+
+        profile = store.get_or_create_profile("u1")
+        assert profile.themes_since_last_mood.get("adventure", 0.0) == pytest.approx(
+            _WEIGHT_COMPLETE_BONUS
+        )
+
 
 # ---------------------------------------------------------------------------
 # Profile management tests
@@ -293,7 +303,7 @@ class TestGetOrCreateProfile:
 
     def test_multiple_users_are_independent(self) -> None:
         store = _make_store(STORY_ADV)
-        store.record_viewed("u1", "s1", TS)
+        store.record_read_progress("u1", "s1", 50, TS)
         p1 = store.get_or_create_profile("u1")
         p2 = store.get_or_create_profile("u2")
         assert "s1" in p1.viewed_story_ids
@@ -325,14 +335,14 @@ class TestGetAllProfiles:
 class TestPersistAndLoad:
     def test_persist_calls_save_user_model(self) -> None:
         store = _make_store(STORY_ADV)
-        store.record_viewed("u1", "s1", TS)
+        store.record_read_progress("u1", "s1", 50, TS)
         store.persist_all_to_server()
         store._stub.SaveUserModel.assert_called_once()
 
     def test_persist_serialises_model_fields(self) -> None:
         store = _make_store(STORY_ADV)
-        store.record_viewed("u1", "s1", TS)
-        store.record_scored("u1", "s1", 5, TS)
+        store.record_read_progress("u1", "s1", 50, TS)
+        store.record_scored("u1", "s1", 8, TS)
         store.persist_all_to_server()
         call_args = store._stub.SaveUserModel.call_args[0][0]
         user_models = list(call_args.user_models)
@@ -340,9 +350,9 @@ class TestPersistAndLoad:
         model = user_models[0]
         assert model.user_id == "u1"
         assert "s1" in list(model.viewed_story_ids)
-        assert model.story_scores["s1"] == 5
+        assert model.story_scores["s1"] == 8
         assert model.theme_weights["adventure"] == pytest.approx(
-            _WEIGHT_VIEW + (5 - 3) * _WEIGHT_SCORE_FACTOR
+            _WEIGHT_VIEW + (8 - _SCORE_NEUTRAL) * _WEIGHT_SCORE_FACTOR
         )
 
     def test_persist_does_not_raise_on_stub_error(self) -> None:
@@ -399,7 +409,7 @@ class TestLoadAllFromServer:
         assert profile.theme_weights["mystery"] == pytest.approx(0.5)
 
     def test_restores_story_scores(self) -> None:
-        model_msg = _make_model_msg("u1", story_scores={"s1": 5})
+        model_msg = _make_model_msg("u1", story_scores={"s1": 8})
 
         stub = MagicMock()
         stub.LoadUserModel.return_value.user_models = [model_msg]
@@ -408,7 +418,7 @@ class TestLoadAllFromServer:
         store.load_all_from_server()
 
         profile = store.get_or_create_profile("u1")
-        assert profile.story_scores["s1"] == 5
+        assert profile.story_scores["s1"] == 8
 
     def test_load_does_not_raise_on_stub_error(self) -> None:
         stub = MagicMock()
@@ -448,64 +458,57 @@ class TestMoodAttribution:
     def test_mood_improvement_boosts_engaged_themes(self) -> None:
         """When mood rises, themes engaged since the last mood event are boosted."""
         store = _make_store(STORY_ADV)
-        store.record_viewed("u1", "s1", TS)
-        # Baseline: theme weight after one view
+
+        # First mood event — establishes baseline score, no attribution yet
+        store.record_mood("u1", 2, TS)
+
+        # View a story between mood events (enters the attribution window)
+        store.record_read_progress("u1", "s1", 50, TS)
         profile = store.get_or_create_profile("u1")
         baseline = profile.theme_weights.get("adventure", 0.0)
 
-        # First mood event — establishes the baseline score, no attribution yet
-        store.record_mood("u1", 2, TS)
-
-        # View the same story again so it's in the mood window
-        store.record_viewed("u1", "s1", TS)
-
-        # Second mood event: mood rises from 2 → 5 (delta = +3)
+        # Second mood event: mood rises 2 → 5 (delta = +3)
         store.record_mood("u1", 5, TS)
 
         after = profile.theme_weights.get("adventure", 0.0)
-        # Expected boost: attribution = (3/4) * MOOD_ATTRIBUTION_FACTOR
-        # Applied to accumulated window weight of _WEIGHT_VIEW
-        expected_boost = (3 / 4) * MOOD_ATTRIBUTION_FACTOR * _WEIGHT_VIEW
-        assert after == pytest.approx(baseline + _WEIGHT_VIEW + expected_boost)
+        # Expected boost: (delta / _MOOD_MAX_DELTA) * MOOD_ATTRIBUTION_FACTOR * window_weight
+        expected_boost = (3 / _MOOD_MAX_DELTA) * MOOD_ATTRIBUTION_FACTOR * _WEIGHT_VIEW
+        assert after == pytest.approx(baseline + expected_boost)
 
     def test_mood_decline_dampens_engaged_themes(self) -> None:
         """When mood falls, weights for engaged themes are reduced (but not below 0)."""
         store = _make_store(STORY_ADV)
-        store.record_viewed("u1", "s1", TS)
         store.record_mood("u1", 5, TS)   # first mood: 5
-        store.record_viewed("u1", "s1", TS)
+        store.record_read_progress("u1", "s1", 50, TS)
 
         profile = store.get_or_create_profile("u1")
         before = profile.theme_weights.get("adventure", 0.0)
 
-        store.record_mood("u1", 2, TS)   # second mood: 2 (delta = -3)
+        store.record_mood("u1", 2, TS)   # second mood: 2 (delta = −3)
 
         after = profile.theme_weights.get("adventure", 0.0)
-        expected_reduction = (3 / 4) * MOOD_ATTRIBUTION_FACTOR * _WEIGHT_VIEW
+        expected_reduction = (3 / _MOOD_MAX_DELTA) * MOOD_ATTRIBUTION_FACTOR * _WEIGHT_VIEW
         assert after == pytest.approx(before - expected_reduction)
 
     def test_mood_weight_never_goes_below_zero(self) -> None:
         """Dampening is capped so weights cannot become negative."""
         store = _make_store(STORY_ADV)
-        # Tiny initial weight — only one view
-        store.record_viewed("u1", "s1", TS)
-        store.record_mood("u1", 5, TS)
-        # Add a second view so the window has weight
-        store.record_viewed("u1", "s1", TS)
+        store.record_mood("u1", 8, TS)
+        store.record_read_progress("u1", "s1", 50, TS)
 
         profile = store.get_or_create_profile("u1")
-        # Override theme weight to be very small
+        # Override to create a scenario where attribution would push below zero
         profile.theme_weights["adventure"] = 0.01
         profile.themes_since_last_mood["adventure"] = 100.0  # large window weight
 
-        # Big mood drop — attribution would push weight strongly negative
+        # Big mood drop — attribution would push weight strongly negative without floor
         store.record_mood("u1", 1, TS)
         assert profile.theme_weights.get("adventure", 0.0) >= 0.0
 
     def test_accumulators_reset_after_mood_event(self) -> None:
         """Transient accumulators are cleared when a mood event is recorded."""
         store = _make_store(STORY_ADV)
-        store.record_viewed("u1", "s1", TS)
+        store.record_read_progress("u1", "s1", 50, TS)
         store.record_mood("u1", 3, TS)
 
         profile = store.get_or_create_profile("u1")
@@ -515,7 +518,7 @@ class TestMoodAttribution:
     def test_first_mood_event_no_attribution(self) -> None:
         """The very first mood event records the baseline; no weights are changed."""
         store = _make_store(STORY_ADV)
-        store.record_viewed("u1", "s1", TS)
+        store.record_read_progress("u1", "s1", 50, TS)
 
         profile = store.get_or_create_profile("u1")
         weight_before = profile.theme_weights.get("adventure", 0.0)
@@ -528,9 +531,8 @@ class TestMoodAttribution:
     def test_equal_mood_no_attribution(self) -> None:
         """If mood does not change, no attribution is applied."""
         store = _make_store(STORY_ADV)
-        store.record_viewed("u1", "s1", TS)
         store.record_mood("u1", 3, TS)
-        store.record_viewed("u1", "s1", TS)
+        store.record_read_progress("u1", "s1", 50, TS)
 
         profile = store.get_or_create_profile("u1")
         before = profile.theme_weights.get("adventure", 0.0)
@@ -545,18 +547,20 @@ class TestMoodAttribution:
         store = _make_store(STORY_ADV)
         store.record_mood("u1", 3, TS)  # start the window
 
-        store.record_viewed("u1", "s1", TS)
+        store.record_read_progress("u1", "s1", 50, TS)
 
         profile = store.get_or_create_profile("u1")
         assert "adventure" in profile.themes_since_last_mood
         assert profile.themes_since_last_mood["adventure"] == pytest.approx(_WEIGHT_VIEW)
 
     def test_accumulator_tracks_completed_stories(self) -> None:
-        """Completing a story adds its themes/tags to the mood window accumulator."""
+        """Completing a story adds the completion bonus to the mood window accumulator."""
         store = _make_store(STORY_ADV)
-        store.record_mood("u1", 3, TS)
+        store.record_read_progress("u1", "s1", 50, TS)   # mark as viewed
+        store.record_mood("u1", 3, TS)                   # start fresh window
 
-        store.record_completed("u1", "s1", TS)
+        # Now complete: view path is idempotent, only complete bonus goes into window
+        store.record_read_progress("u1", "s1", 100, TS)
 
         profile = store.get_or_create_profile("u1")
         assert "adventure" in profile.themes_since_last_mood

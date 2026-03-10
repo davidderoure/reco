@@ -40,58 +40,8 @@ class RecommenderServicer:
     # Fire-and-forget event methods
     # ------------------------------------------------------------------
 
-    def UserViewedStory(self, request: Any, context: Any) -> Any:
-        """Record that a user viewed a story.
-
-        Args:
-            request: ``UserViewedStoryRequest`` proto message.
-            context: gRPC service context.
-
-        Returns:
-            ``google.protobuf.Empty``.
-        """
-        from google.protobuf.empty_pb2 import Empty
-
-        ts = _proto_ts_to_datetime(request.timestamp)
-        try:
-            self._store.record_viewed(request.user_id, request.story_id, ts)
-        except Exception:
-            logger.exception(
-                "Error recording viewed event for user=%r story=%r",
-                request.user_id,
-                request.story_id,
-            )
-            context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details("Internal error recording viewed event.")
-        return Empty()
-
-    def UserCompletedStory(self, request: Any, context: Any) -> Any:
-        """Record that a user completed a story.
-
-        Args:
-            request: ``UserCompletedStoryRequest`` proto message.
-            context: gRPC service context.
-
-        Returns:
-            ``google.protobuf.Empty``.
-        """
-        from google.protobuf.empty_pb2 import Empty
-
-        ts = _proto_ts_to_datetime(request.timestamp)
-        try:
-            self._store.record_completed(request.user_id, request.story_id, ts)
-        except Exception:
-            logger.exception(
-                "Error recording completed event for user=%r story=%r",
-                request.user_id,
-                request.story_id,
-            )
-            context.set_code(grpc.StatusCode.INTERNAL)
-            context.set_details("Internal error recording completed event.")
-        return Empty()
-
     def UserAnsweredQuestion(self, request: Any, context: Any) -> Any:
-        """Record a user's end-of-story score (1–5).
+        """Record a user's end-of-story score (1–10).
 
         Args:
             request: ``UserAnsweredQuestionRequest`` proto message.
@@ -120,7 +70,10 @@ class RecommenderServicer:
         return Empty()
 
     def UserProvidedMood(self, request: Any, context: Any) -> Any:
-        """Record a user's current mood score (1–5).
+        """Record a user's current mood score (1–10).
+
+        An optional ``story_id`` may be provided when the mood prompt is shown
+        at the end of a story, associating the mood signal with that content.
 
         Args:
             request: ``UserProvidedMoodRequest`` proto message.
@@ -132,8 +85,9 @@ class RecommenderServicer:
         from google.protobuf.empty_pb2 import Empty
 
         ts = _proto_ts_to_datetime(request.timestamp)
+        story_id = request.story_id or None  # empty proto string → None
         try:
-            self._store.record_mood(request.user_id, request.mood_score, ts)
+            self._store.record_mood(request.user_id, request.mood_score, ts, story_id=story_id)
         except ValueError as exc:
             context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
             context.set_details(str(exc))
@@ -150,11 +104,15 @@ class RecommenderServicer:
     def UserReadStory(self, request: Any, context: Any) -> Any:
         """Record how far through a story the user has read.
 
-        When ``read_percent`` reaches the configured threshold the story is
-        treated as viewed: its themes/tags receive the standard view weight
-        delta and it is added to the user's viewed set.  Events below the
-        threshold are recorded as analytics but do not affect recommendations.
-        Repeated above-threshold events for the same story are idempotent.
+        Two events are inferred from ``read_percent``:
+
+        * ``≥ 50%`` → treated as *viewed*: themes/tags receive the view weight
+          delta and the story is added to the user's viewed set (idempotent).
+        * ``== 100%`` → treated as *completed*: the completion bonus weight
+          delta is also applied and the story is added to completed_story_ids
+          (idempotent).
+
+        Events below 50% do not affect recommendations.
 
         Args:
             request: ``UserReadStoryRequest`` proto message.

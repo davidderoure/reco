@@ -11,8 +11,6 @@ import "google/protobuf/empty.proto";
 // -------------------------------------------------------
 service RecommenderService {
   // Fire-and-forget event notifications (C# → Python)
-  rpc UserViewedStory(UserViewedStoryRequest) returns (google.protobuf.Empty);
-  rpc UserCompletedStory(UserCompletedStoryRequest) returns (google.protobuf.Empty);
   rpc UserAnsweredQuestion(UserAnsweredQuestionRequest) returns (google.protobuf.Empty);
   rpc UserProvidedMood(UserProvidedMoodRequest) returns (google.protobuf.Empty);
   rpc UserReadStory(UserReadStoryRequest) returns (google.protobuf.Empty);
@@ -36,35 +34,25 @@ service StoryService {
 // Event request messages (C# → Python)
 // -------------------------------------------------------
 
-message UserViewedStoryRequest {
-  string user_id = 1;
-  string story_id = 2;
-  google.protobuf.Timestamp timestamp = 3;
-}
-
-message UserCompletedStoryRequest {
-  string user_id = 1;
-  string story_id = 2;
-  google.protobuf.Timestamp timestamp = 3;
-}
-
 message UserAnsweredQuestionRequest {
-  string user_id = 1;
+  string user_id  = 1;
   string story_id = 2;
-  int32 score = 3;  // 1–5: end-of-story satisfaction rating
+  int32  score    = 3;  // 1–10: end-of-story satisfaction rating
   google.protobuf.Timestamp timestamp = 4;
 }
 
 message UserProvidedMoodRequest {
-  string user_id = 1;
-  int32 mood_score = 2;  // 1–5: current user mood
+  string user_id    = 1;
+  int32  mood_score = 2;  // 1–10: current user mood
   google.protobuf.Timestamp timestamp = 3;
+  string story_id   = 4;  // optional: set when mood is captured at end of a story
 }
 
 message UserReadStoryRequest {
   string user_id      = 1;
   string story_id     = 2;
   int32  read_percent = 3;  // 0–100: percentage of the story read so far
+                            // ≥ 50% inferred as "viewed"; 100% inferred as "completed"
   google.protobuf.Timestamp timestamp = 4;
 }
 
@@ -117,9 +105,9 @@ message GetStoryCatalogueResponse {
 
 // UserEventMessage is kept for incoming events from C# → Python only.
 message UserEventMessage {
-  string event_type = 1;                // "viewed" | "completed" | "scored" | "mood"
+  string event_type = 1;                // "scored" | "mood" | "read_progress"
   string story_id = 2;                  // empty for mood events
-  int32 score = 3;                      // 1–5 for scored/mood events; 0 otherwise
+  int32 score = 3;                      // 1–10 for scored/mood events; 0–100 for read_progress; 0 otherwise
   google.protobuf.Timestamp timestamp = 4;
 }
 
@@ -128,14 +116,14 @@ message UserEventMessage {
 
 message MoodEntry {
   google.protobuf.Timestamp timestamp = 1;
-  int32 score = 2;  // 1–5
+  int32 score = 2;  // 1–10
 }
 
 message UserModelMessage {
   string user_id                      = 1;
   repeated string viewed_story_ids    = 2;
   repeated string completed_story_ids = 3;
-  map<string, int32> story_scores     = 4;  // story_id → latest 1-5 rating
+  map<string, int32> story_scores     = 4;  // story_id → latest 1-10 rating
   repeated MoodEntry mood_scores      = 5;  // capped recent entries
   map<string, float>  theme_weights   = 6;  // accumulated preference weight per theme
   map<string, float>  tag_weights     = 7;  // accumulated preference weight per tag
