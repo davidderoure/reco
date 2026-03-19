@@ -4,3 +4,10 @@ protobuf>=4.25.0
 numpy>=1.26.0
 pytest>=8.0.0
 pytest-cov>=4.1.0
+
+# --- cello sampler ---
+soundfile>=0.12.0      # professional audio I/O (libsndfile wrapper)
+scipy>=1.12.0          # STFT, Hilbert envelope, signal processing
+crepe>=0.0.13          # neural pitch estimation (requires TensorFlow)
+resampy>=0.4.2         # high-quality resampling (Kaiser-best filter)
+tqdm>=4.66.0           # progress bars

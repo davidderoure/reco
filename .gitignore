@@ -23,3 +23,8 @@ github_pat_*
 .coverage
 htmlcov/
 .pytest_cache/
+
+# Editor swap/temp files
+*.swp
+*.swo
+*~

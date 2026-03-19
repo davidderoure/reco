@@ -1,12 +1,37 @@
-"""Shared pytest fixtures for all recommender tests."""
+"""Shared pytest fixtures for all tests."""
 
 from __future__ import annotations
 
+import sys
 from datetime import datetime, timezone
+from unittest.mock import MagicMock
 
+import numpy as np
 import pytest
 
 from recommender.models import Story, UserProfile
+
+
+# ---------------------------------------------------------------------------
+# Stub heavy optional dependencies so tests run without TensorFlow / resampy
+# ---------------------------------------------------------------------------
+
+
+def pytest_configure(config: pytest.Config) -> None:  # noqa: ARG001
+    """Install lightweight stubs for optional heavy dependencies.
+
+    This allows tests to import cello_sampler modules and use
+    ``unittest.mock.patch`` against ``crepe.predict`` / ``resampy.resample``
+    without requiring those packages to be installed.
+    """
+    if "resampy" not in sys.modules:
+        stub_resampy = MagicMock()
+        # resample must return a float64 ndarray so downstream .astype() works.
+        stub_resampy.resample.return_value = np.zeros(160, dtype=np.float64)
+        sys.modules["resampy"] = stub_resampy
+
+    if "crepe" not in sys.modules:
+        sys.modules["crepe"] = MagicMock()
 
 
 TS = datetime(2024, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
