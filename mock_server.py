@@ -387,9 +387,10 @@ class InMemoryUserStateStore:
     Event dict schema::
 
         {
-            "event_type": str,          # "scored"|"mood"|"read_progress"|"bookmark"
-            "story_id":   str,          # "" for mood events
-            "score":      int,          # 0 when not applicable
+            "event_type":      str,   # "scored"|"mood"|"read_progress"|"bookmark"
+            "story_id":        str,   # "" for mood events
+            "score":           int,   # 0 when not applicable
+            "question_number": int,   # scored events only: 1–4; 0 for other types
             "timestamp_seconds": int,
         }
     """
@@ -405,12 +406,14 @@ class InMemoryUserStateStore:
         event_type: str,
         story_id: str = "",
         score: int = 0,
+        question_number: int = 0,
     ) -> None:
         """Append one event for *user_id*. Called by the HTTP /api/event handler."""
         entry = {
             "event_type": event_type,
             "story_id": story_id,
             "score": score,
+            "question_number": question_number,
             "timestamp_seconds": int(datetime.now(timezone.utc).timestamp()),
         }
         with self._lock:
@@ -593,7 +596,8 @@ def grpc_get_recommendations(user_id: str) -> tuple[list[str], str | None]:
 
 
 def grpc_send_event(
-    event_type: str, user_id: str, story_id: str = "", score: int = 0
+    event_type: str, user_id: str, story_id: str = "", score: int = 0,
+    question_number: int = 1,
 ) -> str | None:
     """Fire one event at the recommender. Returns error message or None."""
     ts = _now_ts()
@@ -602,7 +606,8 @@ def grpc_send_event(
         if event_type == "scored":
             stub.UserAnsweredQuestion(
                 recommender_pb2.UserAnsweredQuestionRequest(
-                    user_id=user_id, story_id=story_id, score=score, timestamp=ts
+                    user_id=user_id, story_id=story_id, score=score, timestamp=ts,
+                    question_number=question_number,
                 ),
                 timeout=3.0,
             )
@@ -748,6 +753,7 @@ class MockServerHTTPHandler(BaseHTTPRequestHandler):
         user_id = str(body.get("user_id", "")).strip()
         story_id = str(body.get("story_id", "")).strip()
         score = int(body.get("score", 0))
+        question_number = int(body.get("question_number", 1))
 
         if not user_id:
             _send_error(self, "user_id required")
@@ -756,6 +762,9 @@ class MockServerHTTPHandler(BaseHTTPRequestHandler):
         # Validate
         if event_type == "scored" and (not story_id or not 1 <= score <= 10):
             _send_error(self, "story_id and score 1-10 required for scored")
+            return
+        if event_type == "scored" and not 1 <= question_number <= 4:
+            _send_error(self, "question_number must be 1–4 for scored")
             return
         if event_type == "mood" and not 1 <= score <= 10:
             _send_error(self, "score 1-10 required for mood")
@@ -775,11 +784,15 @@ class MockServerHTTPHandler(BaseHTTPRequestHandler):
         # Record locally first (so the state panel shows events immediately,
         # even before the recommender's periodic SaveUserState call)
         _user_state_store.record_event(
-            user_id, event_type, story_id=story_id, score=score
+            user_id, event_type, story_id=story_id, score=score,
+            question_number=question_number if event_type == "scored" else 0,
         )
 
         # Forward to recommender
-        err = grpc_send_event(event_type, user_id, story_id=story_id, score=score)
+        err = grpc_send_event(
+            event_type, user_id, story_id=story_id, score=score,
+            question_number=question_number,
+        )
         if err:
             _send_json(self, {"ok": False, "warning": err})
         else:
@@ -1075,7 +1088,10 @@ function storyCardHTML(story, showButtons) {
   let buttons   = '';
   if (showButtons) {
     buttons = `<div class="card-buttons">
-      <button class="btn" onclick="promptScore('${sid}')">&#11088; Score</button>
+      <button class="btn" onclick="promptScore('${sid}',1)">&#11088; Q1</button>
+      <button class="btn" onclick="promptScore('${sid}',2)">Q2</button>
+      <button class="btn" onclick="promptScore('${sid}',3)">Q3</button>
+      <button class="btn" onclick="promptScore('${sid}',4)">Q4</button>
       <button class="btn" onclick="promptMood()">&#128149; Mood</button>
       <button class="btn" onclick="promptReadProgress('${sid}')">&#128336; Read%</button>
       <button class="btn" onclick="sendEvent('bookmark','${sid}')">&#128278; Bookmark</button>
@@ -1164,11 +1180,12 @@ async function getRecommendations() {
 // ---------------------------------------------------------------------------
 // Events
 // ---------------------------------------------------------------------------
-async function _sendEventImpl(type, storyId, score) {
+async function _sendEventImpl(type, storyId, score, questionNumber) {
   const userId = currentUserId();
   if (!userId) { setStatus('Enter a user ID first.', true); return; }
 
   const body = { type, user_id: userId, story_id: storyId || '', score: score || 0 };
+  if (questionNumber) body.question_number = questionNumber;
   try {
     const resp = await fetch('/api/event', {
       method: 'POST',
@@ -1180,7 +1197,7 @@ async function _sendEventImpl(type, storyId, score) {
     if (data.warning) setStatus('Sent (recommender warning: ' + data.warning + ')', true);
     else setStatus('Event sent: ' + type);
 
-    const label = score ? `${type}(${score})` : type;
+    const label = score ? `${type}(${score}${questionNumber ? ',q' + questionNumber : ''})` : type;
     const storyLabel = storyId ? ` on ${storyId}` : '';
     appendLog(`${label}${storyLabel}`);
     await loadState();
@@ -1189,16 +1206,17 @@ async function _sendEventImpl(type, storyId, score) {
   }
 }
 
-function sendEvent(type, storyId, score) {
+function sendEvent(type, storyId, score, questionNumber) {
   // Chain this event onto the pending-ops queue so that concurrent button
   // clicks are processed in order and getRecommendations() can await them.
-  _pendingOps = _pendingOps.then(() => _sendEventImpl(type, storyId, score));
+  _pendingOps = _pendingOps.then(() => _sendEventImpl(type, storyId, score, questionNumber));
 }
 
-function promptScore(storyId) {
-  const s = prompt('Rate this story (1 = poor \\u2192 10 = excellent):');
+function promptScore(storyId, qNum) {
+  const label = qNum === 1 ? '1 = poor \\u2192 10 = excellent' : '1 \\u2192 10';
+  const s = prompt(`Q${qNum} score (${label}):`);
   const score = parseInt(s, 10);
-  if (score >= 1 && score <= 10) sendEvent('scored', storyId, score);
+  if (score >= 1 && score <= 10) sendEvent('scored', storyId, score, qNum);
   else if (s !== null) alert('Please enter a number between 1 and 10.');
 }
 
@@ -1273,7 +1291,7 @@ function weightsFromEvents(events) {
     if (!story) continue;
     let delta = 0;
     if (e.event_type === 'read_progress' && e.score >= 50) delta = 1.0;
-    if (e.event_type === 'scored') delta = (e.score - 5) * 0.25;
+    if (e.event_type === 'scored' && (e.question_number || 1) === 1) delta = (e.score - 5) * 0.25;
     if (delta === 0) continue;
     for (const t of story.themes) themeW[t] = (themeW[t] || 0) + delta;
     for (const t of story.tags)   tagW[t]   = (tagW[t]   || 0) + delta;

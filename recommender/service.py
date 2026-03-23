@@ -41,7 +41,7 @@ class RecommenderServicer:
     # ------------------------------------------------------------------
 
     def UserAnsweredQuestion(self, request: Any, context: Any) -> Any:
-        """Record a user's end-of-story score (1–10).
+        """Record a user's answer to an end-of-story question (score 1–10).
 
         Args:
             request: ``UserAnsweredQuestionRequest`` proto message.
@@ -53,8 +53,12 @@ class RecommenderServicer:
         from google.protobuf.empty_pb2 import Empty
 
         ts = _proto_ts_to_datetime(request.timestamp)
+        question_number = request.question_number or 1  # 0 (unset proto3 default) → 1
         try:
-            self._store.record_scored(request.user_id, request.story_id, request.score, ts)
+            self._store.record_scored(
+                request.user_id, request.story_id, request.score, ts,
+                question_number=question_number,
+            )
         except ValueError as exc:
             context.set_code(grpc.StatusCode.INVALID_ARGUMENT)
             context.set_details(str(exc))

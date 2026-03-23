@@ -26,6 +26,7 @@ from recommender.user_state import (
     _WEIGHT_SCORE_FACTOR,
     _SCORE_NEUTRAL,
     _MOOD_MAX_DELTA,
+    _QUESTION_WEIGHT_FACTORS,
 )
 
 
@@ -104,6 +105,35 @@ class TestRecordScored:
         profile = store.get_or_create_profile("u1")
         expected = _WEIGHT_VIEW + (9 - _SCORE_NEUTRAL) * _WEIGHT_SCORE_FACTOR
         assert profile.theme_weights["adventure"] == pytest.approx(expected)
+
+    def test_optional_question_applies_no_weight_delta(self) -> None:
+        store = _make_store(STORY_ADV)
+        store.record_scored("u1", "s1", 9, TS, question_number=2)
+        profile = store.get_or_create_profile("u1")
+        assert profile.theme_weights.get("adventure", 0.0) == pytest.approx(0.0)
+
+    def test_optional_question_not_stored_in_story_scores(self) -> None:
+        store = _make_store(STORY_ADV)
+        store.record_scored("u1", "s1", 8, TS, question_number=3)
+        profile = store.get_or_create_profile("u1")
+        assert "s1" not in profile.story_scores
+
+    def test_question_1_explicit_identical_to_default(self) -> None:
+        store_default = _make_store(STORY_ADV)
+        store_explicit = _make_store(STORY_ADV)
+        store_default.record_scored("u1", "s1", 7, TS)
+        store_explicit.record_scored("u1", "s1", 7, TS, question_number=1)
+        p_default = store_default.get_or_create_profile("u1")
+        p_explicit = store_explicit.get_or_create_profile("u1")
+        assert p_default.theme_weights == p_explicit.theme_weights
+        assert p_default.story_scores == p_explicit.story_scores
+
+    def test_invalid_score_raises_for_optional_question(self) -> None:
+        store = _make_store(STORY_ADV)
+        with pytest.raises(ValueError):
+            store.record_scored("u1", "s1", 0, TS, question_number=2)
+        with pytest.raises(ValueError):
+            store.record_scored("u1", "s1", 11, TS, question_number=4)
 
 
 # ---------------------------------------------------------------------------

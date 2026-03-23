@@ -44,6 +44,13 @@ READ_VIEWED_THRESHOLD_PERCENT = 50
 # and is added to completed_story_ids.  Idempotent.
 READ_COMPLETED_THRESHOLD_PERCENT = 100
 
+# Maps question_number → weight factor for UserAnsweredQuestion events.
+# Only question 1 (compulsory satisfaction score) affects preference weights.
+# Add an entry here to enable per-question weight logic for future questions.
+_QUESTION_WEIGHT_FACTORS: dict[int, float] = {
+    1: _WEIGHT_SCORE_FACTOR,
+}
+
 
 class UserStateStore:
     """Thread-safe in-memory store for all user profiles.
@@ -203,30 +210,42 @@ class UserStateStore:
     # ------------------------------------------------------------------
 
     def record_scored(
-        self, user_id: str, story_id: str, score: int, timestamp: datetime
+        self,
+        user_id: str,
+        story_id: str,
+        score: int,
+        timestamp: datetime,
+        question_number: int = 1,
     ) -> None:
-        """Record the user's end-of-story rating and update preference weights.
+        """Record the user's answer to an end-of-story question.
 
-        Applies a weight delta of ``(score - 5) × 0.25`` per theme/tag.
-        Score 5 is neutral (no change), 6–10 boost weights, 1–4 penalise.
+        Question 1 (compulsory satisfaction score) applies a weight delta of
+        ``(score - 5) × 0.25`` per theme/tag and stores the score in
+        ``profile.story_scores``.  Questions 2–4 (optional) are validated and
+        accepted but have no effect on preference weights or stored state.
 
         Args:
             user_id: The rating user.
             story_id: The rated story.
             score: Integer in [1, 10].
             timestamp: When the event occurred.
+            question_number: Which question was answered (1 = compulsory,
+                2–4 = optional).  Defaults to 1.
 
         Raises:
             ValueError: If *score* is outside [1, 10].
         """
         if not 1 <= score <= 10:
             raise ValueError(f"Score must be between 1 and 10, got {score!r}")
+        factor = _QUESTION_WEIGHT_FACTORS.get(question_number)
+        if factor is None:
+            return  # optional question: validated, no weight effect
         with self._lock:
             profile = self.get_or_create_profile(user_id)
             profile.story_scores[story_id] = score
             story = self._catalogue.get_story(story_id)
             if story:
-                delta = (score - _SCORE_NEUTRAL) * _WEIGHT_SCORE_FACTOR
+                delta = (score - _SCORE_NEUTRAL) * factor
                 self._apply_weight_delta(profile, story, delta)
 
     def record_read_progress(

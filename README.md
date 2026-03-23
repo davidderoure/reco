@@ -38,7 +38,7 @@ sequenceDiagram
     CS->>PY: UserReadStory(user_id, story_id, read_percent, ts)
     PY-->>CS: Empty
 
-    CS->>PY: UserAnsweredQuestion(user_id, story_id, score 1–10, ts)
+    CS->>PY: UserAnsweredQuestion(user_id, story_id, score 1–10, question_number, ts)
     PY-->>CS: Empty
 
     CS->>PY: UserProvidedMood(user_id, mood_score 1–10, ts [, story_id])
@@ -346,7 +346,7 @@ All settings are driven by environment variables. See `.env.example` for the ful
 All requests carry `user_id` (string) and `timestamp` (UTC). There is no concept of a user session; state is saved periodically by a background thread.
 
 ```protobuf
-rpc UserAnsweredQuestion(...)  returns (Empty);   // fire-and-forget (score 1–10)
+rpc UserAnsweredQuestion(...)  returns (Empty);   // fire-and-forget (score 1–10; question_number 1–4)
 rpc UserProvidedMood(...)      returns (Empty);   // fire-and-forget (mood_score 1–10; optional story_id)
 rpc UserReadStory(...)         returns (Empty);   // fire-and-forget (read_percent 0–100; ≥50% = viewed, 100% = completed)
 rpc UserBookmarkedStory(...)   returns (Empty);   // fire-and-forget (analytic only, no rec effect)

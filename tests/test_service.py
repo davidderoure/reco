@@ -81,6 +81,22 @@ class TestUserAnsweredQuestion:
         servicer.UserAnsweredQuestion(request, ctx)
         ctx.set_code.assert_called_with(grpc.StatusCode.INTERNAL)
 
+    def test_question_number_forwarded_to_record_scored(self) -> None:
+        servicer = _make_servicer()
+        request = MagicMock(user_id="u1", story_id="s1", score=7,
+                            question_number=2, timestamp=_make_ts())
+        servicer.UserAnsweredQuestion(request, _make_context())
+        _, kwargs = servicer._store.record_scored.call_args
+        assert kwargs["question_number"] == 2
+
+    def test_unset_question_number_normalised_to_1(self) -> None:
+        servicer = _make_servicer()
+        request = MagicMock(user_id="u1", story_id="s1", score=8,
+                            question_number=0, timestamp=_make_ts())
+        servicer.UserAnsweredQuestion(request, _make_context())
+        _, kwargs = servicer._store.record_scored.call_args
+        assert kwargs["question_number"] == 1
+
 
 # ---------------------------------------------------------------------------
 # UserProvidedMood tests

@@ -37,8 +37,10 @@ service StoryService {
 message UserAnsweredQuestionRequest {
   string user_id  = 1;
   string story_id = 2;
-  int32  score    = 3;  // 1–10: end-of-story satisfaction rating
+  int32  score    = 3;  // 1–10
   google.protobuf.Timestamp timestamp = 4;
+  int32  question_number = 5;  // 1 = compulsory satisfaction score (default when unset);
+                               // 2–4 = optional follow-up questions
 }
 
 message UserProvidedMoodRequest {
