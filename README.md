@@ -121,7 +121,7 @@ Every interaction updates a per-user theme/tag weight vector:
 | Read ≥ 50% | +1.0 (inferred "viewed"; applied once, idempotent) |
 | Read = 100% | +2.0 bonus (inferred "completed", additive with the view weight) |
 | Read < 50% | no weight impact; progress noted but not acted on |
-| Scored 1–10 | `(score − 5) × 0.25` — neutral at 5; score 1 = −1.0, score 10 = +1.25 |
+| Scored 1–10 (Q1) | `(score − 5) × 0.25` — neutral at 5; score 1 = −1.0, score 10 = +1.25. Q2–Q4 (optional) are analytics-only; no weight effect. |
 | Mood 1–10 | attribution feedback: `±(mood_delta / 9) × 0.5` applied to themes/tags engaged since the previous mood event — improvement boosts them, decline dampens (floor 0) |
 | Bookmarked | recorded as an analytic event only; no current weight impact |
 | Skip (no view) | `skip_count` incremented; story moves toward Tier 2 after > 3 consecutive skips |
@@ -155,7 +155,7 @@ mock_server.py            Mock C# backend + browser test UI (see below)
 load_users.py             Synthetic load generator — 100 test users (see below)
 capacity_model.py         Persistence capacity estimator — volume & frequency (see below)
 config.py                 Environment-variable configuration
-tests/                    pytest test suite (200 tests)
+tests/                    pytest test suite (206 tests)
 ```
 
 ## Setup
@@ -200,7 +200,7 @@ Then open **http://localhost:8080** in a browser.
 
 | Panel | Description |
 |---|---|
-| **Story Catalogue** | 27 sample Oxford museum stories — click Score, Mood, Read%, or Bookmark to fire events |
+| **Story Catalogue** | 27 sample Oxford museum stories — click Q1–Q4, Mood, Read%, or Bookmark to fire events |
 | **Recommendations** | 6 recommended stories returned by the engine after clicking "Get Recommendations" |
 | **Preference Weights** | Live bar chart of theme/tag weights, updated after every interaction |
 | **Event Log** | Timestamped record of every event fired for the selected user |
@@ -210,7 +210,7 @@ switch between users and observe how different interaction histories produce
 different recommendations, and how the collaborative strategy responds once
 multiple users have built up histories.
 
-**Event ordering:** Story button clicks (Score, Mood, Read%, …) fire asynchronous
+**Event ordering:** Story button clicks (Q1–Q4, Mood, Read%, …) fire asynchronous
 gRPC calls but are serialised through a Promise queue before the "Get Recommendations"
 call is dispatched. This means clicking several buttons and then immediately clicking
 "Get Recommendations" is safe — the recommendations will reflect all preceding events.
