@@ -9,9 +9,9 @@ specific recording session or instrument.
 # I/O
 # ---------------------------------------------------------------------------
 
-#: Frames per streaming chunk (10 s at 96 kHz).  Fits in ~15 MB RAM for
+#: Frames per streaming chunk (10 s at 48 kHz).  Fits in ~8 MB RAM for
 #: a 4-channel float32 signal.
-CHUNK_SIZE_FRAMES: int = 960_000
+CHUNK_SIZE_FRAMES: int = 480_000
 
 #: Seconds of overlap kept between consecutive chunks to avoid slicing notes
 #: at chunk boundaries.
@@ -22,12 +22,12 @@ OVERLAP_SECONDS: float = 2.0
 MAX_NOTE_DURATION_SECONDS: float = 8.0
 
 #: Samples prepended before each detected onset to capture the full transient
-#: (5 ms at 96 kHz).
-PRE_ONSET_SAMPLES: int = 480
+#: (5 ms at 48 kHz).
+PRE_ONSET_SAMPLES: int = 240
 
 #: Samples of gap removed from the end of a note window before the next onset
-#: (10 ms).  Prevents bleed from the following attack into a legato tail.
-POST_ONSET_GAP_SAMPLES: int = 960
+#: (10 ms at 48 kHz).  Prevents bleed from the following attack into a legato tail.
+POST_ONSET_GAP_SAMPLES: int = 480
 
 #: Number of worker processes for parallel per-note analysis.
 N_WORKERS: int = 4
@@ -36,13 +36,13 @@ N_WORKERS: int = 4
 # Onset detection
 # ---------------------------------------------------------------------------
 
-#: STFT window length in samples at 96 kHz (≈42 ms).  Long enough to give
+#: STFT window length in samples at 48 kHz (≈42 ms).  Long enough to give
 #: good frequency resolution on the lowest cello string (~65 Hz).
-STFT_NPERSEG: int = 4096
+STFT_NPERSEG: int = 2048
 
-#: STFT hop size in samples (≈5.3 ms).  Short enough for accurate onset
-#: timing.
-STFT_HOP: int = 512
+#: STFT hop size in samples (≈5.3 ms at 48 kHz).  Short enough for accurate
+#: onset timing.
+STFT_HOP: int = 256
 
 #: Lower bound of the analysis frequency band (Hz).  Suppresses sub-bass
 #: rumble below the lowest cello pitch.
@@ -74,7 +74,7 @@ HPS_ORDER: int = 4
 #: Maximum duration in milliseconds of the analysis frame used for polyphony
 #: detection.  Longer windows give finer frequency resolution (fewer Hanning
 #: leakage false-positives between adjacent pitches), but cost more CPU.
-#: 300 ms → 3.3 Hz/bin at 96 kHz, resolving pitches > 2 semitones apart.
+#: 300 ms → 3.3 Hz/bin at 48 kHz, resolving pitches > 2 semitones apart.
 POLYPHONY_ANALYSIS_DURATION_MS: float = 300.0
 
 #: A secondary pitch peak in the multi-pitch salience map must exceed this
@@ -135,7 +135,17 @@ STACCATO_MAX_DURATION_MS: float = 250.0
 #: Minimum decay rate for staccato (slower than pizzicato).
 STACCATO_MIN_DECAY_RATE_DB_PER_MS: float = 0.20
 
+# — Legato —
+#: Minimum total sounding duration for a legato note in ms.  Shorter takes
+#: are not useful for sustaining playback and are rejected post-classification.
+MIN_LEGATO_DURATION_MS: float = 500.0
+
 # — Vibrato —
+#: Minimum total sounding duration for a vibrato note in ms.  At the slowest
+#: musically valid rate (4 Hz) a minimum of 750 ms guarantees at least 3 full
+#: oscillation cycles, enough to clearly establish the vibrato character.
+MIN_VIBRATO_DURATION_MS: float = 750.0
+
 #: Pitch modulation must exceed this depth (in cents peak-to-peak) to be
 #: classified as vibrato rather than natural intonation variation.
 VIBRATO_MIN_DEPTH_CENTS: float = 20.0

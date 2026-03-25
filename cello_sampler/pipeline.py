@@ -30,6 +30,7 @@ from cello_sampler import polyphony as poly_module
 from cello_sampler import pitch as pitch_module
 from cello_sampler.io import SampleWriter, detect_subtype, stream_chunks
 from cello_sampler.models import (
+    ArticulationType,
     ClassifiedNote,
     NoteCandidate,
     ProcessingResult,
@@ -88,6 +89,24 @@ def _analyse_candidate(
     features = art_module.extract_features(candidate, pitch)
     articulation = art_module.classify(features)
 
+    # 4. Minimum-duration gate for sustaining articulations.
+    #    Very short legato/vibrato takes are not useful for looped playback.
+    min_ms: float | None = None
+    if articulation == ArticulationType.LEGATO:
+        min_ms = config.MIN_LEGATO_DURATION_MS
+    elif articulation == ArticulationType.VIBRATO:
+        min_ms = config.MIN_VIBRATO_DURATION_MS
+
+    if min_ms is not None and features.total_duration_ms < min_ms:
+        return RejectedNote(
+            candidate=candidate,
+            reason=RejectionReason.TOO_SHORT,
+            detail=(
+                f"{articulation.value} note is {features.total_duration_ms:.0f} ms "
+                f"(minimum {min_ms:.0f} ms)"
+            ),
+        )
+
     return ClassifiedNote(
         candidate=candidate,
         pitch=pitch,
@@ -115,7 +134,7 @@ def run(
     output files.
 
     Args:
-        input_path: Path to the source 96 kHz multi-channel audio file.
+        input_path: Path to the source 48 kHz multi-channel audio file.
         output_dir: Root directory for labelled output files.
         n_workers: Number of parallel worker processes for per-note analysis.
         chunk_size: Streaming chunk size in frames.
@@ -210,12 +229,14 @@ def run(
                 writer.write_accepted(item)
 
     logger.info(
-        "Done. Accepted: %d, Rejected: %d (polyphonic: %d, intonation: %d, low_conf: %d)",
+        "Done. Accepted: %d, Rejected: %d "
+        "(polyphonic: %d, intonation: %d, low_conf: %d, too_short: %d)",
         result.n_accepted,
         result.n_rejected,
         sum(1 for r in result.rejected if r.reason == RejectionReason.POLYPHONIC),
         sum(1 for r in result.rejected if r.reason == RejectionReason.INTONATION),
         sum(1 for r in result.rejected if r.reason == RejectionReason.LOW_CONFIDENCE),
+        sum(1 for r in result.rejected if r.reason == RejectionReason.TOO_SHORT),
     )
 
     return result

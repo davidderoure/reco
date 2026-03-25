@@ -29,6 +29,7 @@ class RejectionReason(str, Enum):
     POLYPHONIC = "polyphonic"
     INTONATION = "intonation"
     LOW_CONFIDENCE = "low_confidence"
+    TOO_SHORT = "too_short"
 
 
 # ---------------------------------------------------------------------------
