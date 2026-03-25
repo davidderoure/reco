@@ -18,7 +18,7 @@ import soundfile as sf
 from cello_sampler.pipeline import run
 
 
-SR = 96_000
+SR = 48_000
 
 
 # ---------------------------------------------------------------------------

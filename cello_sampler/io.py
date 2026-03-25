@@ -172,7 +172,7 @@ class SampleWriter:
         self,
         output_dir: Path,
         source_bit_depth: str = "FLOAT",
-        sample_rate: int = 96_000,
+        sample_rate: int = 48_000,
     ) -> None:
         self._root = output_dir
         self._subtype = source_bit_depth

@@ -37,7 +37,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "input_file",
         type=Path,
-        help="Path to the source audio file (WAV, AIFF, FLAC; 96 kHz recommended).",
+        help="Path to the source audio file (WAV, AIFF, FLAC; 48 kHz recommended).",
     )
     p.add_argument(
         "output_dir",
@@ -57,7 +57,7 @@ def build_parser() -> argparse.ArgumentParser:
     io_group.add_argument(
         "--chunk-seconds",
         type=float,
-        default=config.CHUNK_SIZE_FRAMES / 96_000,
+        default=config.CHUNK_SIZE_FRAMES / 48_000,
         metavar="SECS",
         help="Streaming chunk size in seconds.",
     )
@@ -167,7 +167,7 @@ def apply_overrides(args: argparse.Namespace) -> None:
     config.STACCATO_MAX_DURATION_MS = args.stacc_max_duration_ms
     config.VIBRATO_MIN_DEPTH_CENTS = args.vibrato_min_depth_cents
     config.N_WORKERS = args.workers
-    config.CHUNK_SIZE_FRAMES = int(args.chunk_seconds * 96_000)
+    config.CHUNK_SIZE_FRAMES = int(args.chunk_seconds * 48_000)
     config.OVERLAP_SECONDS = args.overlap_seconds
 
 

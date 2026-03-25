@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from cello_sampler import config
 from cello_sampler.onset import (
     detect_onsets,
     onset_strength,
@@ -20,7 +21,7 @@ from cello_sampler.onset import (
 # Helpers
 # ---------------------------------------------------------------------------
 
-SR = 96_000  # sample rate used in all tests
+SR = 48_000  # sample rate used in all tests
 
 
 def _sine_burst(
@@ -32,7 +33,7 @@ def _sine_burst(
     """Generate a mono sine-wave burst with a sharp onset.
 
     Uses a 5 ms linear ramp-in so the spectral flux peaks immediately at the
-    start of the burst (within one STFT hop at 96 kHz).  A full Hanning
+    start of the burst (within one STFT hop at 48 kHz).  A full Hanning
     envelope would peak at the burst midpoint, causing the onset detector to
     report the wrong time.
     """
@@ -151,7 +152,7 @@ class TestDetectOnsets:
         known_onsets_s = [0.2, 0.7, 1.3]
         signal = _multi_burst_signal(known_onsets_s, note_duration_s=0.25, total_duration_s=2.0)
         strength = onset_strength(signal, SR)
-        onsets = detect_onsets(strength, hop=512, sample_rate=SR)
+        onsets = detect_onsets(strength, hop=config.STFT_HOP, sample_rate=SR)
 
         assert len(onsets) >= len(known_onsets_s), (
             f"Expected at least {len(known_onsets_s)} onsets, got {len(onsets)}"
@@ -171,19 +172,19 @@ class TestDetectOnsets:
         # Onsets 30 ms apart — below default 50 ms min.
         signal = _multi_burst_signal([0.1, 0.13], note_duration_s=0.02, total_duration_s=1.0)
         strength = onset_strength(signal, SR)
-        onsets = detect_onsets(strength, hop=512, sample_rate=SR, min_note_duration_ms=50.0)
+        onsets = detect_onsets(strength, hop=config.STFT_HOP, sample_rate=SR, min_note_duration_ms=50.0)
         assert len(onsets) <= 1
 
     def test_silence_produces_no_onsets(self) -> None:
         signal = _silence(2.0)
         strength = onset_strength(signal, SR)
-        onsets = detect_onsets(strength, hop=512, sample_rate=SR)
+        onsets = detect_onsets(strength, hop=config.STFT_HOP, sample_rate=SR)
         assert len(onsets) == 0
 
     def test_returns_sorted_ascending(self) -> None:
         signal = _multi_burst_signal([0.5, 1.0, 1.5], total_duration_s=2.5)
         strength = onset_strength(signal, SR)
-        onsets = detect_onsets(strength, hop=512, sample_rate=SR)
+        onsets = detect_onsets(strength, hop=config.STFT_HOP, sample_rate=SR)
         assert list(onsets) == sorted(onsets)
 
 

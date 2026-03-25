@@ -2,7 +2,7 @@
 
 Uses a spectral-flux based onset strength envelope computed via STFT, with
 an adaptive local-mean threshold and non-maximum suppression.  All analysis
-is performed on a mono mix at the native 96 kHz sample rate so no resampling
+is performed on a mono mix at the native 48 kHz sample rate so no resampling
 is introduced before writing output files.
 """
 

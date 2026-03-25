@@ -6,7 +6,7 @@ to cello's variable harmonic balance — a property that confuses autocorrelatio
 and YIN-based fundamental estimators, especially under heavy bow pressure.
 
 CREPE operates internally at 16 kHz, so the mono mix is downsampled from
-96 kHz before calling it.  The 96 kHz audio is never resampled for output.
+48 kHz before calling it.  The 48 kHz audio is never resampled for output.
 """
 
 from __future__ import annotations
@@ -27,11 +27,11 @@ _CREPE_SR = 16_000
 
 
 def _downsample_to_crepe(mono_96k: np.ndarray, source_sr: int) -> np.ndarray:
-    """Downsample a 96 kHz mono signal to 16 kHz using resampy (Kaiser-best).
+    """Downsample a 48 kHz mono signal to 16 kHz using resampy (Kaiser-best).
 
     Args:
         mono_96k: 1-D float32 mono signal at *source_sr*.
-        source_sr: Source sample rate (typically 96 000 Hz).
+        source_sr: Source sample rate (typically 48 000 Hz).
 
     Returns:
         1-D float32 array at 16 000 Hz.

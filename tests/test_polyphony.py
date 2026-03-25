@@ -11,7 +11,7 @@ from cello_sampler.models import NoteCandidate
 from cello_sampler.polyphony import is_polyphonic
 
 
-SR = 96_000
+SR = 48_000
 
 
 def _make_candidate(audio: np.ndarray) -> NoteCandidate:
