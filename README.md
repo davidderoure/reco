@@ -48,7 +48,7 @@ User          App                    Recommender Service
  │ Selects     │                              │
  │ story #3    │                              │
  ├────────────>│                              │
- │             │  RecordEvent(VIEW)           │
+ │             │  UserViewedStory()           │
  │             ├─────────────────────────────>│
  │             │                              │
  │ Reads       │                              │
@@ -58,8 +58,8 @@ User          App                    Recommender Service
  │             │                              │
  │ Finishes    │                              │
  ├────────────>│                              │
- │             │  RecordEvent(STORY_PROGRESS) │
- │             │  completion_pct=100          │
+ │             │  UserReadStory()             │
+ │             │  read_percent=100            │
  │             ├─────────────────────────────>│
  │             │                              │
  │ Shows       │                              │
@@ -68,19 +68,19 @@ User          App                    Recommender Service
  │ Q1: 5/5     │                              │
  │ (connect)   │                              │
  ├────────────>│                              │
- │             │  RecordEvent(QUESTION)       │
+ │             │  UserAnsweredQuestion()      │
  │             │  question_num=1, response=5  │
  │             ├─────────────────────────────>│
  │             │                              │
  │ Q2: 4/5     │                              │
  ├────────────>│                              │
- │             │  RecordEvent(QUESTION)       │
+ │             │  UserAnsweredQuestion()      │
  │             │  question_num=2, response=4  │
  │             ├─────────────────────────────>│
  │             │                              │
  │ Bookmarks   │                              │
  ├────────────>│                              │
- │             │  RecordEvent(BOOKMARK)       │
+ │             │  UserBookmarkedStory()       │
  │             ├─────────────────────────────>│
  │             │                              │
  │ Requests    │                              │
@@ -104,35 +104,75 @@ syntax = "proto3";
 
 package recommender;
 
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/empty.proto";
+
 // Main service interface
 service StoryRecommender {
-  // Get personalized story recommendations
-  rpc GetRecommendations(RecommendationRequest) returns (RecommendationResponse);
+  // Fire-and-forget event notifications
+  rpc UserAnsweredQuestion(UserAnsweredQuestionRequest) returns (google.protobuf.Empty);
+  rpc UserReadStory(UserReadStoryRequest) returns (google.protobuf.Empty);
+  rpc UserBookmarkedStory(UserBookmarkedStoryRequest) returns (google.protobuf.Empty);
+  rpc UserViewedStory(UserViewedStoryRequest) returns (google.protobuf.Empty);
+  rpc UserSearchedTag(UserSearchedTagRequest) returns (google.protobuf.Empty);
   
-  // Record a user interaction event
-  rpc RecordEvent(AnalyticsEvent) returns (EventResponse);
+  // Request/response: returns recommendations
+  rpc GetRecommendations(GetRecommendationsRequest) returns (GetRecommendationsResponse);
   
   // Load story metadata (called at startup or when stories are added)
   rpc LoadStories(StoryBatch) returns (LoadResponse);
-  
-  // Export current state (for daily backups)
-  rpc ExportState(ExportRequest) returns (StateData);
 }
 
-// Request for recommendations
-message RecommendationRequest {
+// ===== EVENT MESSAGES (Fire-and-forget) =====
+
+message UserAnsweredQuestionRequest {
   string user_id = 1;
+  string story_id = 2;
+  int32 response = 3;  // 1-5 (changed from V1's "score" 1-10)
+  google.protobuf.Timestamp timestamp = 4;
+  int32 question_number = 5;  // 1-4
+}
+
+message UserReadStoryRequest {
+  string user_id = 1;
+  string story_id = 2;
+  int32 read_percent = 3;  // 0-100 (≥50% = viewed, 100% = completed)
+  google.protobuf.Timestamp timestamp = 4;
+}
+
+message UserBookmarkedStoryRequest {
+  string user_id = 1;
+  string story_id = 2;
+  google.protobuf.Timestamp timestamp = 3;
+}
+
+message UserViewedStoryRequest {
+  string user_id = 1;
+  string story_id = 2;
+  google.protobuf.Timestamp timestamp = 3;
+}
+
+message UserSearchedTagRequest {
+  string user_id = 1;
+  string tag = 2;
+  google.protobuf.Timestamp timestamp = 3;
+}
+
+// ===== RECOMMENDATION MESSAGES =====
+
+message GetRecommendationsRequest {
+  string user_id = 1;
+  google.protobuf.Timestamp timestamp = 2;
   
   // Optional context for topical boosting
-  repeated string boost_tags = 2;
-  bool prefer_new_stories = 3;
+  repeated string boost_tags = 3;
+  bool prefer_new_stories = 4;
   
   // Number of recommendations (default: 6)
-  int32 count = 4;
+  int32 count = 5;
 }
 
-// Recommendation response
-message RecommendationResponse {
+message GetRecommendationsResponse {
   repeated Recommendation recommendations = 1;
 }
 
@@ -146,32 +186,8 @@ message Recommendation {
   float avg_connectedness = 7;  // Average connectedness score (1-5), optional
 }
 
-// Analytics event
-message AnalyticsEvent {
-  string user_id = 1;
-  string event_type = 2;  // "view", "story_progress", "question_response", "bookmark", "search"
-  int64 timestamp_ms = 3;  // Unix timestamp in milliseconds
-  
-  // Event-specific data (only populate relevant fields)
-  string story_id = 4;
-  
-  // For story_progress events
-  float completion_percentage = 5;  // 0-100
-  
-  // For question_response events
-  int32 question_number = 6;  // 1-4
-  int32 response = 7;  // 1-5
-  
-  // For search events
-  string search_tag = 8;
-}
+// ===== STORY LOADING =====
 
-message EventResponse {
-  bool success = 1;
-  string message = 2;
-}
-
-// Story batch for initial loading
 message StoryBatch {
   repeated Story stories = 1;
 }
@@ -187,46 +203,49 @@ message LoadResponse {
   int32 stories_loaded = 2;
   repeated string available_tags = 3;
 }
-
-// State export
-message ExportRequest {
-  // Optional date range filter
-  int64 start_timestamp_ms = 1;  // Unix timestamp, 0 = no filter
-  int64 end_timestamp_ms = 2;    // Unix timestamp, 0 = no filter
-}
-
-message StateData {
-  string json_state = 1;  // Full state as JSON string
-  int64 export_timestamp_ms = 2;
-  int32 total_users = 3;
-  int32 total_events = 4;
-}
 ```
 
 ## Event Types
 
-### 1. VIEW Event
+### 1. UserViewedStory
 Triggered when user opens a story.
 
-```json
-{
-  "user_id": "user_123",
-  "event_type": "view",
-  "timestamp_ms": 1704067200000,
-  "story_id": "story1"
+```protobuf
+message UserViewedStoryRequest {
+  string user_id = 1;
+  string story_id = 2;
+  google.protobuf.Timestamp timestamp = 3;
 }
 ```
 
-### 2. STORY_PROGRESS Event
-Triggered when user leaves a story (automatically tracked by scroll position or explicit completion).
-
+**Example:**
 ```json
 {
   "user_id": "user_123",
-  "event_type": "story_progress",
-  "timestamp_ms": 1704067500000,
   "story_id": "story1",
-  "completion_percentage": 100.0
+  "timestamp": "2024-01-01T10:30:00Z"
+}
+```
+
+### 2. UserReadStory
+Triggered when user leaves a story (automatically tracked by scroll position or explicit completion).
+
+```protobuf
+message UserReadStoryRequest {
+  string user_id = 1;
+  string story_id = 2;
+  int32 read_percent = 3;  // 0-100
+  google.protobuf.Timestamp timestamp = 4;
+}
+```
+
+**Example:**
+```json
+{
+  "user_id": "user_123",
+  "story_id": "story1",
+  "read_percent": 100,
+  "timestamp": "2024-01-01T10:35:00Z"
 }
 ```
 
@@ -235,17 +254,27 @@ Triggered when user leaves a story (automatically tracked by scroll position or 
 - 50-99% = Partial read (moderate positive signal)
 - 0-49% = Abandoned (weak/neutral signal)
 
-### 3. QUESTION_RESPONSE Event
+### 3. UserAnsweredQuestion
 Triggered when user answers a post-reading question.
 
+```protobuf
+message UserAnsweredQuestionRequest {
+  string user_id = 1;
+  string story_id = 2;
+  int32 response = 3;  // 1-5
+  google.protobuf.Timestamp timestamp = 4;
+  int32 question_number = 5;  // 1-4
+}
+```
+
+**Example:**
 ```json
 {
   "user_id": "user_123",
-  "event_type": "question_response",
-  "timestamp_ms": 1704067600000,
   "story_id": "story1",
-  "question_number": 1,
-  "response": 5
+  "response": 5,
+  "timestamp": "2024-01-01T10:36:00Z",
+  "question_number": 1
 }
 ```
 
@@ -263,29 +292,45 @@ Triggered when user answers a post-reading question.
 
 **Note:** Question 1 may not be answered if user closes app. Handle missing responses gracefully.
 
-### 4. BOOKMARK Event
+### 4. UserBookmarkedStory
 Triggered when user bookmarks a story (save for later).
 
+```protobuf
+message UserBookmarkedStoryRequest {
+  string user_id = 1;
+  string story_id = 2;
+  google.protobuf.Timestamp timestamp = 3;
+}
+```
+
+**Example:**
 ```json
 {
   "user_id": "user_123",
-  "event_type": "bookmark",
-  "timestamp_ms": 1704067700000,
-  "story_id": "story1"
+  "story_id": "story1",
+  "timestamp": "2024-01-01T10:37:00Z"
 }
 ```
 
 **Signal Strength:** Moderate preference (weaker than high connectedness, stronger than just viewing)
 
-### 5. SEARCH Event
+### 5. UserSearchedTag
 Triggered when user browses by tag.
 
+```protobuf
+message UserSearchedTagRequest {
+  string user_id = 1;
+  string tag = 2;
+  google.protobuf.Timestamp timestamp = 3;
+}
+```
+
+**Example:**
 ```json
 {
   "user_id": "user_123",
-  "event_type": "search",
-  "timestamp_ms": 1704067800000,
-  "search_tag": "ancient"
+  "tag": "ancient",
+  "timestamp": "2024-01-01T10:38:00Z"
 }
 ```
 

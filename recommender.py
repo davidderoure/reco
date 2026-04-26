@@ -278,10 +278,84 @@ class StoryRecommender:
         # Invalidate similarity cache
         self._story_similarity_cache = {}
     
-    def add_event(self, event: AnalyticsEvent):
-        """Process an analytics event"""
+    # Event handlers - V1-aligned separate methods
+    
+    def user_viewed_story(self, user_id: str, story_id: str, timestamp: datetime):
+        """Handle UserViewedStory event"""
+        # Store as internal event for analytical exports
+        event = AnalyticsEvent(user_id, 'view', timestamp, story_id=story_id)
         self.events.append(event)
-        user_id = event.user_id
+        
+        # Ensure user profile exists
+        if user_id not in self.users:
+            self.users[user_id] = UserProfile(user_id)
+        
+        user = self.users[user_id]
+        user.viewed_stories[story_id] = timestamp
+        user.recent_story_views.append((timestamp, story_id))
+        
+        # Update tag exposure (neutral at first)
+        if story_id in self.stories:
+            for tag in self.stories[story_id].tags:
+                user.tag_interactions[tag].append((0.1, timestamp))
+        
+        # Mark any recommendations for this story as selected
+        for rec in user.recommendations_shown:
+            if rec.story_id == story_id and not rec.selected:
+                rec.selected = True
+                # Reset ignore count since they selected it
+                user.story_ignore_count[story_id] = 0
+    
+    def user_read_story(self, user_id: str, story_id: str, read_percent: int, timestamp: datetime):
+        """Handle UserReadStory event (V1 name: read_percent instead of completion_percentage)"""
+        # Store as internal event for analytical exports
+        event = AnalyticsEvent(user_id, 'story_progress', timestamp, 
+                             story_id=story_id, completion_percentage=read_percent)
+        self.events.append(event)
+        
+        # Ensure user profile exists
+        if user_id not in self.users:
+            self.users[user_id] = UserProfile(user_id)
+        
+        user = self.users[user_id]
+        user.story_progress[story_id] = (read_percent, timestamp)
+        
+        # If completed (100%), treat as strong positive signal
+        if read_percent >= 100:
+            if story_id in self.stories:
+                for tag in self.stories[story_id].tags:
+                    user.tag_interactions[tag].append((1.0, timestamp))
+            
+            # Check for story transition (sequence)
+            if user.last_completed_story and user.last_completed_timestamp:
+                time_diff = (timestamp - user.last_completed_timestamp).total_seconds() / 60.0
+                
+                if time_diff <= self.transition_window_minutes:
+                    self._record_story_transition(
+                        user,
+                        user.last_completed_story,
+                        story_id,
+                        timestamp,
+                        time_diff
+                    )
+            
+            # Update last completed
+            user.last_completed_story = story_id
+            user.last_completed_timestamp = timestamp
+        
+        # Partial completion is still a moderate signal
+        elif read_percent >= 50:
+            if story_id in self.stories:
+                for tag in self.stories[story_id].tags:
+                    user.tag_interactions[tag].append((0.5, timestamp))
+    
+    def user_answered_question(self, user_id: str, story_id: str, response: int, 
+                               question_number: int, timestamp: datetime):
+        """Handle UserAnsweredQuestion event (V1 style: response 1-5, not score 1-10)"""
+        # Store as internal event for analytical exports
+        event = AnalyticsEvent(user_id, 'question_response', timestamp,
+                             story_id=story_id, question_number=question_number, response=response)
+        self.events.append(event)
         
         # Ensure user profile exists
         if user_id not in self.users:
@@ -289,98 +363,98 @@ class StoryRecommender:
         
         user = self.users[user_id]
         
-        # Process based on event type
+        # Store all question responses
+        user.question_responses.append((story_id, question_number, response, timestamp))
+        
+        # Question 1 (compulsory) is the connectedness score
+        if question_number == 1:
+            user.story_connectedness[story_id] = (response, timestamp)
+            
+            # Update story's connectedness stats
+            if story_id in self.stories:
+                self.stories[story_id].connectedness_scores.append((response, timestamp))
+                self._update_story_connectedness_stats(story_id)
+                
+                # Adjust tag preference based on connectedness
+                for tag in self.stories[story_id].tags:
+                    # High connectedness (4-5) = strong positive, Low (1-2) = negative
+                    tag_score = (response - 3) * 0.5  # Range: -1.0 to +1.0
+                    user.tag_interactions[tag].append((tag_score, timestamp))
+            
+            # Update transition with connectedness if applicable
+            self._update_recent_transition_connectedness(user, story_id, response)
+    
+    def user_bookmarked_story(self, user_id: str, story_id: str, timestamp: datetime):
+        """Handle UserBookmarkedStory event"""
+        # Store as internal event for analytical exports
+        event = AnalyticsEvent(user_id, 'bookmark', timestamp, story_id=story_id)
+        self.events.append(event)
+        
+        # Ensure user profile exists
+        if user_id not in self.users:
+            self.users[user_id] = UserProfile(user_id)
+        
+        user = self.users[user_id]
+        user.bookmarked_stories[story_id] = timestamp
+        
+        # Moderate positive signal
+        if story_id in self.stories:
+            for tag in self.stories[story_id].tags:
+                user.tag_interactions[tag].append((0.7, timestamp))
+    
+    def user_searched_tag(self, user_id: str, tag: str, timestamp: datetime):
+        """Handle UserSearchedTag event"""
+        # Store as internal event for analytical exports
+        event = AnalyticsEvent(user_id, 'search', timestamp, tag=tag)
+        self.events.append(event)
+        
+        # Ensure user profile exists
+        if user_id not in self.users:
+            self.users[user_id] = UserProfile(user_id)
+        
+        user = self.users[user_id]
+        
+        # Track tag searches - moderate interest signal
+        user.tag_interactions[tag].append((0.3, timestamp))
+    
+    # Legacy unified method (kept for backward compatibility with tests)
+    def add_event(self, event: AnalyticsEvent):
+        """Process an analytics event (legacy unified method)"""
+        # Dispatch to appropriate handler based on event type
         if event.event_type == 'view':
-            story_id = event.data['story_id']
-            user.viewed_stories[story_id] = event.timestamp
-            user.recent_story_views.append((event.timestamp, story_id))
-            
-            # Update tag exposure (neutral at first)
-            if story_id in self.stories:
-                for tag in self.stories[story_id].tags:
-                    user.tag_interactions[tag].append((0.1, event.timestamp))
-            
-            # Mark any recommendations for this story as selected
-            for rec in user.recommendations_shown:
-                if rec.story_id == story_id and not rec.selected:
-                    rec.selected = True
-                    # Reset ignore count since they selected it
-                    user.story_ignore_count[story_id] = 0
-                    
+            self.user_viewed_story(
+                event.user_id,
+                event.data['story_id'],
+                event.timestamp
+            )
         elif event.event_type == 'story_progress':
-            story_id = event.data['story_id']
-            completion_pct = event.data['completion_percentage']
-            user.story_progress[story_id] = (completion_pct, event.timestamp)
-            
-            # If completed (100%), treat as strong positive signal
-            if completion_pct >= 100:
-                if story_id in self.stories:
-                    for tag in self.stories[story_id].tags:
-                        user.tag_interactions[tag].append((1.0, event.timestamp))
-                
-                # Check for story transition (sequence)
-                if user.last_completed_story and user.last_completed_timestamp:
-                    time_diff = (event.timestamp - user.last_completed_timestamp).total_seconds() / 60.0
-                    
-                    if time_diff <= self.transition_window_minutes:
-                        self._record_story_transition(
-                            user,
-                            user.last_completed_story,
-                            story_id,
-                            event.timestamp,
-                            time_diff
-                        )
-                
-                # Update last completed
-                user.last_completed_story = story_id
-                user.last_completed_timestamp = event.timestamp
-            
-            # Partial completion is still a moderate signal
-            elif completion_pct >= 50:
-                if story_id in self.stories:
-                    for tag in self.stories[story_id].tags:
-                        user.tag_interactions[tag].append((0.5, event.timestamp))
-                        
+            self.user_read_story(
+                event.user_id,
+                event.data['story_id'],
+                event.data['completion_percentage'],
+                event.timestamp
+            )
         elif event.event_type == 'question_response':
-            story_id = event.data['story_id']
-            question_number = event.data['question_number']
-            response = event.data['response']  # 1-5
-            
-            # Store all question responses
-            user.question_responses.append((story_id, question_number, response, event.timestamp))
-            
-            # Question 1 (compulsory) is the connectedness score
-            if question_number == 1:
-                user.story_connectedness[story_id] = (response, event.timestamp)
-                
-                # Update story's connectedness stats
-                if story_id in self.stories:
-                    self.stories[story_id].connectedness_scores.append((response, event.timestamp))
-                    self._update_story_connectedness_stats(story_id)
-                    
-                    # Adjust tag preference based on connectedness
-                    for tag in self.stories[story_id].tags:
-                        # High connectedness (4-5) = strong positive, Low (1-2) = negative
-                        tag_score = (response - 3) * 0.5  # Range: -1.0 to +1.0
-                        user.tag_interactions[tag].append((tag_score, event.timestamp))
-                
-                # Update transition with connectedness if applicable
-                self._update_recent_transition_connectedness(user, story_id, response)
-                        
+            self.user_answered_question(
+                event.user_id,
+                event.data['story_id'],
+                event.data['response'],
+                event.data['question_number'],
+                event.timestamp
+            )
         elif event.event_type == 'bookmark':
-            story_id = event.data['story_id']
-            user.bookmarked_stories[story_id] = event.timestamp
-            
-            # Moderate positive signal
-            if story_id in self.stories:
-                for tag in self.stories[story_id].tags:
-                    user.tag_interactions[tag].append((0.7, event.timestamp))
-                    
+            self.user_bookmarked_story(
+                event.user_id,
+                event.data['story_id'],
+                event.timestamp
+            )
         elif event.event_type == 'search':
-            # Track tag searches
-            if 'tag' in event.data:
-                tag = event.data['tag']
-                user.tag_interactions[tag].append((0.3, event.timestamp))
+            self.user_searched_tag(
+                event.user_id,
+                event.data['tag'],
+                event.timestamp
+            )
+
     
     def _record_story_transition(self, user: UserProfile, from_story_id: str, 
                                  to_story_id: str, timestamp: datetime, 

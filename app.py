@@ -588,13 +588,7 @@ def browse_tag(tag):
     user_id = get_user_id()
     
     # Record tag search event
-    event = AnalyticsEvent(
-        user_id,
-        'search',
-        datetime.now(),
-        tag=tag
-    )
-    recommender.add_event(event)
+    recommender.user_searched_tag(user_id, tag, datetime.now())
     
     # Get stories with this tag
     stories_with_tag = [
@@ -616,13 +610,7 @@ def view_story(story_id):
     content = STORY_CONTENT.get(story_id, "Story content not available.")
     
     # Record view event
-    event = AnalyticsEvent(
-        user_id,
-        'view',
-        datetime.now(),
-        story_id=story_id
-    )
-    recommender.add_event(event)
+    recommender.user_viewed_story(user_id, story_id, datetime.now())
     
     # Check if already completed
     user = recommender.users.get(user_id)
@@ -644,21 +632,14 @@ def story_progress(story_id):
     """Record story reading progress when user leaves the story"""
     user_id = get_user_id()
     
-    # Get completion percentage from form
-    completion_pct = float(request.form.get('completion_percentage', 0))
+    # Get completion percentage from form (V1 naming: read_percent)
+    read_percent = int(float(request.form.get('completion_percentage', 0)))
     
-    # Record progress event
-    event = AnalyticsEvent(
-        user_id,
-        'story_progress',
-        datetime.now(),
-        story_id=story_id,
-        completion_percentage=completion_pct
-    )
-    recommender.add_event(event)
+    # Record progress event using V1-aligned method
+    recommender.user_read_story(user_id, story_id, read_percent, datetime.now())
     
     # If 100% complete, redirect to questions
-    if completion_pct >= 100:
+    if read_percent >= 100:
         return redirect(url_for('story_questions', story_id=story_id))
     else:
         # Partial completion, go back to recommendations
@@ -688,15 +669,14 @@ def submit_question(story_id):
     question_number = int(request.form['question_number'])
     response = int(request.form['response'])
     
-    event = AnalyticsEvent(
-        user_id,
-        'question_response',
-        datetime.now(),
-        story_id=story_id,
-        question_number=question_number,
-        response=response
+    # Record question response using V1-aligned method
+    recommender.user_answered_question(
+        user_id, 
+        story_id, 
+        response, 
+        question_number, 
+        datetime.now()
     )
-    recommender.add_event(event)
     
     # Return to questions page to allow answering more questions
     return redirect(url_for('story_questions', story_id=story_id))
@@ -706,13 +686,8 @@ def bookmark_story(story_id):
     """Bookmark a story"""
     user_id = get_user_id()
     
-    event = AnalyticsEvent(
-        user_id,
-        'bookmark',
-        datetime.now(),
-        story_id=story_id
-    )
-    recommender.add_event(event)
+    # Record bookmark event using V1-aligned method
+    recommender.user_bookmarked_story(user_id, story_id, datetime.now())
     
     # Redirect back to where the user came from
     return redirect(request.referrer or url_for('recommendations'))
