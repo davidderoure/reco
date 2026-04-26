@@ -920,69 +920,183 @@ class StoryRecommender:
         return insights
     
     # State management
-    def save_state(self, start_date: datetime = None, end_date: datetime = None) -> Dict:
+    def save_state(self, 
+                   mode: str = "full",
+                   start_date: datetime = None, 
+                   end_date: datetime = None) -> Dict:
         """
-        Export system state as a dictionary.
-        Optionally filter by date range for daily exports.
-        """
-        # Filter events by date range if specified
-        events_to_export = self.events
-        if start_date or end_date:
-            events_to_export = [
-                e for e in self.events
-                if (not start_date or e.timestamp >= start_date) and
-                   (not end_date or e.timestamp <= end_date)
-            ]
+        Export system state with different modes.
         
-        return {
-            'stories': {sid: story.to_dict() for sid, story in self.stories.items()},
-            'users': {
-                uid: {
-                    'user_id': user.user_id,
-                    'viewed_stories': {sid: ts.isoformat() for sid, ts in user.viewed_stories.items()},
-                    'story_progress': {
-                        sid: (pct, ts.isoformat()) 
-                        for sid, (pct, ts) in user.story_progress.items()
-                    },
-                    'bookmarked_stories': {sid: ts.isoformat() for sid, ts in user.bookmarked_stories.items()},
-                    'tag_interactions': {
-                        tag: [(score, ts.isoformat()) for score, ts in interactions]
-                        for tag, interactions in user.tag_interactions.items()
-                    },
-                    'story_connectedness': {
-                        sid: (score, ts.isoformat())
-                        for sid, (score, ts) in user.story_connectedness.items()
-                    },
-                    'question_responses': [
-                        (sid, qnum, resp, ts.isoformat())
-                        for sid, qnum, resp, ts in user.question_responses
-                    ],
-                    'recent_story_views': [(ts.isoformat(), sid) for ts, sid in user.recent_story_views],
-                    'recommendations_shown': [rec.to_dict() for rec in user.recommendations_shown],
-                    'story_ignore_count': dict(user.story_ignore_count),
-                    'story_sequences': [t.to_dict() for t in user.story_sequences],
-                    'last_completed_story': user.last_completed_story,
-                    'last_completed_timestamp': user.last_completed_timestamp.isoformat() if user.last_completed_timestamp else None
-                }
-                for uid, user in self.users.items()
-            },
-            'story_transitions': [t.to_dict() for t in self.story_transitions],
-            'events': [event.to_dict() for event in events_to_export],
-            'available_tags': list(self.available_tags),
-            'config': {
+        Args:
+            mode: "full" (analytical - everything), 
+                  "operational" (lightweight - for fault tolerance),
+                  "minimal" (users only)
+            start_date: Filter events (for daily exports)
+            end_date: Filter events (for daily exports)
+        
+        Returns:
+            Dictionary containing state data
+        """
+        state = {}
+        
+        # Always include user profiles (needed for both operational and analytical)
+        state['users'] = {}
+        for uid, user in self.users.items():
+            user_data = {
+                'user_id': user.user_id,
+                'viewed_stories': {sid: ts.isoformat() for sid, ts in user.viewed_stories.items()},
+                'story_progress': {
+                    sid: (pct, ts.isoformat()) 
+                    for sid, (pct, ts) in user.story_progress.items()
+                },
+                'bookmarked_stories': {sid: ts.isoformat() for sid, ts in user.bookmarked_stories.items()},
+                'tag_interactions': {
+                    tag: [(score, ts.isoformat()) for score, ts in interactions]
+                    for tag, interactions in user.tag_interactions.items()
+                },
+                'story_connectedness': {
+                    sid: (score, ts.isoformat())
+                    for sid, (score, ts) in user.story_connectedness.items()
+                },
+                'story_ignore_count': dict(user.story_ignore_count),
+                'last_completed_story': user.last_completed_story,
+                'last_completed_timestamp': user.last_completed_timestamp.isoformat() if user.last_completed_timestamp else None
+            }
+            state['users'][uid] = user_data
+        
+        if mode in ["full", "operational"]:
+            # Include stories (needed for collaborative filtering)
+            state['stories'] = {sid: story.to_dict() for sid, story in self.stories.items()}
+            state['available_tags'] = list(self.available_tags)
+            state['config'] = {
                 'event_half_life_days': self.event_half_life_days,
                 'connectedness_half_life_days': self.connectedness_half_life_days,
                 'transition_window_minutes': self.transition_window_minutes,
                 'recommendation_config': self.recommendation_config,
                 'ignore_threshold': self.ignore_threshold,
                 'ignore_decay_rate': self.ignore_decay_rate
-            },
-            'export_metadata': {
+            }
+        
+        if mode == "full":
+            # ONLY for analytical exports - include everything for analysis
+            
+            # Add analytical data to user profiles
+            for uid, user in self.users.items():
+                # Question responses (for analysis)
+                state['users'][uid]['question_responses'] = [
+                    (sid, qnum, resp, ts.isoformat())
+                    for sid, qnum, resp, ts in user.question_responses
+                ]
+                
+                # Recommendation provenance (for analysis - understand why recommendations were made)
+                state['users'][uid]['recommendations_shown'] = [
+                    rec.to_dict() for rec in user.recommendations_shown
+                ]
+                
+                # Sequences (for analysis)
+                state['users'][uid]['story_sequences'] = [
+                    t.to_dict() for t in user.story_sequences
+                ]
+                
+                # Recent views (for analysis)
+                state['users'][uid]['recent_story_views'] = [
+                    (ts.isoformat(), sid) for ts, sid in user.recent_story_views
+                ]
+            
+            # Global transitions (for analysis)
+            state['story_transitions'] = [t.to_dict() for t in self.story_transitions]
+            
+            # Events (optionally filtered by date for daily exports)
+            events_to_export = self.events
+            if start_date or end_date:
+                events_to_export = [
+                    e for e in self.events
+                    if (not start_date or e.timestamp >= start_date) and
+                       (not end_date or e.timestamp <= end_date)
+                ]
+            state['events'] = [event.to_dict() for event in events_to_export]
+            
+            state['export_metadata'] = {
                 'export_timestamp': datetime.now().isoformat(),
+                'export_mode': mode,
                 'start_date': start_date.isoformat() if start_date else None,
                 'end_date': end_date.isoformat() if end_date else None
             }
-        }
+        
+        if mode == "operational":
+            # Minimal metadata for operational checkpoints
+            state['checkpoint_metadata'] = {
+                'checkpoint_timestamp': datetime.now().isoformat(),
+                'total_users': len(self.users),
+                'total_stories': len(self.stories)
+            }
+        
+        return state
+    
+    def save_operational_checkpoint(self, filepath: str = None) -> str:
+        """
+        Save lightweight checkpoint for fault tolerance.
+        Called every few minutes by the service.
+        
+        This is optimized for:
+        - Fast saving/loading
+        - Collaborative filtering (needs user models)
+        - Service continuity after restart
+        
+        Args:
+            filepath: Optional path for checkpoint file
+        
+        Returns:
+            Path where checkpoint was saved
+        """
+        import os
+        
+        if filepath is None:
+            # Create checkpoints directory if it doesn't exist
+            os.makedirs('checkpoints', exist_ok=True)
+            filepath = f"checkpoints/checkpoint_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        
+        state = self.save_state(mode="operational")
+        
+        with open(filepath, 'w') as f:
+            json.dump(state, f)
+        
+        return filepath
+    
+    def export_analytical_state(self, filepath: str = None, 
+                                start_date: datetime = None, 
+                                end_date: datetime = None) -> str:
+        """
+        Export comprehensive state for analysis and testing.
+        Called daily or on-demand.
+        
+        This includes everything needed for:
+        - Testing recommender logic
+        - Understanding recommendation decisions
+        - Evaluating method performance
+        - Analyzing user patterns
+        
+        Args:
+            filepath: Optional path for export file
+            start_date: Filter events from this date (for daily exports)
+            end_date: Filter events to this date (for daily exports)
+        
+        Returns:
+            Path where export was saved
+        """
+        import os
+        
+        if filepath is None:
+            # Create exports directory if it doesn't exist
+            os.makedirs('exports', exist_ok=True)
+            filepath = f"exports/export_{datetime.now().strftime('%Y%m%d')}.json"
+        
+        state = self.save_state(mode="full", start_date=start_date, end_date=end_date)
+        
+        with open(filepath, 'w') as f:
+            json.dump(state, f, indent=2)  # Pretty-print for readability
+        
+        return filepath
     
     def load_state(self, state: Dict):
         """Load system state from a dictionary"""

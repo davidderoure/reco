@@ -756,14 +756,14 @@ def insights():
 
 @app.route('/export_state')
 def export_state():
-    """Export current state as JSON"""
-    state = recommender.save_state()
+    """Export full analytical state as JSON (for testing and analysis)"""
+    state = recommender.save_state(mode="full")
     return jsonify(state)
 
 @app.route('/export_daily/<date_str>')
 def export_daily(date_str):
     """
-    Export state for a specific date.
+    Export analytical state for a specific date.
     Example: /export_daily/2024-01-15
     """
     try:
@@ -771,10 +771,47 @@ def export_daily(date_str):
         start_date = target_date.replace(hour=0, minute=0, second=0, microsecond=0)
         end_date = start_date + timedelta(days=1)
         
-        state = recommender.save_state(start_date=start_date, end_date=end_date)
+        state = recommender.save_state(mode="full", start_date=start_date, end_date=end_date)
         return jsonify(state)
     except ValueError:
         return jsonify({'error': 'Invalid date format. Use YYYY-MM-DD'}), 400
+
+@app.route('/checkpoint')
+def checkpoint():
+    """Get operational checkpoint (lightweight, for fault tolerance)"""
+    state = recommender.save_state(mode="operational")
+    return jsonify(state)
+
+@app.route('/save_checkpoint', methods=['POST'])
+def save_checkpoint():
+    """Save operational checkpoint to file"""
+    try:
+        filepath = recommender.save_operational_checkpoint()
+        return jsonify({'success': True, 'filepath': filepath})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/save_analytical_export', methods=['POST'])
+def save_analytical_export():
+    """Save analytical export to file (daily or on-demand)"""
+    try:
+        # Optional: get date range from request
+        data = request.get_json() if request.is_json else {}
+        start_date = None
+        end_date = None
+        
+        if 'start_date' in data:
+            start_date = datetime.fromisoformat(data['start_date'])
+        if 'end_date' in data:
+            end_date = datetime.fromisoformat(data['end_date'])
+        
+        filepath = recommender.export_analytical_state(
+            start_date=start_date,
+            end_date=end_date
+        )
+        return jsonify({'success': True, 'filepath': filepath})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/reset')
 def reset():

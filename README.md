@@ -355,64 +355,164 @@ Story(
 - Browseable in the UI
 - Expected to be mostly fixed but can change as content is added
 
-## State Export
+## State Management
 
-The system supports exporting state for daily backups and analysis.
+The system provides **two modes** of state persistence for different purposes:
 
-### Full State Export
+### 1. Operational Checkpoints (Fault Tolerance)
 
+**Purpose:** Keep service running after restarts, enable collaborative filtering  
+**Frequency:** Every few minutes  
+**Contents:** User profiles + story catalog (lightweight)  
+**Format:** Optimized for fast loading
+
+**HTTP Endpoint:**
 ```python
-GET /export_state
+GET /checkpoint
 ```
 
-Returns complete system state as JSON:
+Returns operational state (excludes analytical data like recommendation provenance):
 
 ```json
 {
-  "stories": { ... },
-  "users": { ... },
-  "events": [ ... ],
-  "available_tags": ["ancient", "natural", ...],
-  "config": {
-    "event_half_life_days": 30.0,
-    "connectedness_half_life_days": 14.0,
-    "recommendation_config": { ... },
-    "ignore_threshold": 3,
-    "ignore_decay_rate": 0.2
-  },
-  "export_metadata": {
-    "export_timestamp": "2024-01-15T10:30:00",
-    "start_date": null,
-    "end_date": null
+  "users": { ... },     // User profiles with preferences
+  "stories": { ... },   // Story catalog
+  "config": { ... },    // System configuration
+  "checkpoint_metadata": {
+    "checkpoint_timestamp": "2024-01-15T10:30:00",
+    "total_users": 150,
+    "total_stories": 25
   }
 }
 ```
 
-### Daily State Export (Date-Filtered)
+**Save to File:**
+```python
+POST /save_checkpoint
+```
 
+Returns: `{"success": true, "filepath": "checkpoints/checkpoint_20240115_103000.json"}`
+
+**Usage in Production:**
+```python
+# In your service (every 5 minutes)
+import schedule
+
+def save_checkpoint():
+    response = requests.post('http://localhost:5000/save_checkpoint')
+    print(f"Checkpoint saved: {response.json()['filepath']}")
+
+schedule.every(5).minutes.do(save_checkpoint)
+```
+
+### 2. Analytical Exports (Testing & Evaluation)
+
+**Purpose:** Understand recommendation decisions, test logic, evaluate performance  
+**Frequency:** Daily or on-demand  
+**Contents:** Everything including recommendation provenance, sequences, events  
+**Format:** Pretty-printed JSON for readability
+
+**Full Analytical Export:**
+```python
+GET /export_state
+```
+
+Returns complete system state with all analytical data:
+
+```json
+{
+  "stories": { ... },
+  "users": {
+    "user_123": {
+      "viewed_stories": { ... },
+      "story_connectedness": { ... },
+      "recommendations_shown": [  // Provenance for analysis
+        {
+          "story_id": "story1",
+          "method": "content",
+          "slot_position": 0,
+          "timestamp": "2024-01-15T10:30:00",
+          "selected": true
+        }
+      ],
+      "question_responses": [ ... ],
+      "story_sequences": [ ... ]
+    }
+  },
+  "events": [ ... ],
+  "story_transitions": [ ... ],
+  "export_metadata": {
+    "export_timestamp": "2024-01-15T10:30:00",
+    "export_mode": "full"
+  }
+}
+```
+
+**Daily Export (Date-Filtered):**
 ```python
 GET /export_daily/2024-01-15
 ```
 
-Returns only events from specified date:
+Returns analytical state with events filtered to specific date:
 
 ```json
 {
-  "stories": { ... },  // Full story catalog
-  "users": { ... },    // Full user profiles (with cumulative data)
-  "events": [ ... ],   // ONLY events from 2024-01-15
+  "stories": { ... },     // Full catalog
+  "users": { ... },       // Full profiles (cumulative)
+  "events": [ ... ],      // ONLY events from 2024-01-15
   "export_metadata": {
     "export_timestamp": "2024-01-16T00:00:00",
+    "export_mode": "full",
     "start_date": "2024-01-15T00:00:00",
     "end_date": "2024-01-16T00:00:00"
   }
 }
 ```
 
+**Save Analytical Export:**
+```python
+POST /save_analytical_export
+Content-Type: application/json
+
+{
+  "start_date": "2024-01-15T00:00:00",  // Optional
+  "end_date": "2024-01-16T00:00:00"     // Optional
+}
+```
+
+Returns: `{"success": true, "filepath": "exports/export_20240115.json"}`
+
+**Usage for Daily Analysis:**
+```python
+# Run daily at midnight
+from datetime import datetime, timedelta
+
+def export_yesterday():
+    yesterday = datetime.now() - timedelta(days=1)
+    response = requests.post('http://localhost:5000/save_analytical_export', json={
+        'start_date': yesterday.replace(hour=0, minute=0).isoformat(),
+        'end_date': yesterday.replace(hour=23, minute=59).isoformat()
+    })
+    print(f"Daily export saved: {response.json()['filepath']}")
+```
+
+### Comparison Table
+
+| Feature | Operational Checkpoint | Analytical Export |
+|---------|----------------------|-------------------|
+| **Frequency** | Every few minutes | Daily or on-demand |
+| **Size** | Small (~100KB for 100 users) | Large (~10MB for 100 users) |
+| **Events** | Not included | Full event history |
+| **Recommendation Provenance** | Not included | Full details (method, slot, selected) |
+| **Question Responses** | Not included | All responses |
+| **Sequences** | Not included | Full transition graphs |
+| **Purpose** | Service continuity | Understanding & testing |
+| **Format** | Compact JSON | Pretty-printed JSON |
+| **Loading Speed** | Fast (<1 sec) | Slower (10+ sec) |
+
 ### Key State Components
 
-**Recommendation History:**
-Each recommendation includes:
+**Recommendation Provenance** (Analytical only):
 ```json
 {
   "story_id": "story1",
@@ -423,8 +523,7 @@ Each recommendation includes:
 }
 ```
 
-**Question Responses:**
-All responses stored:
+**Question Responses** (Analytical only):
 ```json
 [
   ["story1", 1, 5, "2024-01-15T10:30:00"],  // [story_id, q_num, response, timestamp]
@@ -432,12 +531,40 @@ All responses stored:
 ]
 ```
 
-**Ignore Counts:**
+**Ignore Counts** (Both modes):
 ```json
 {
   "story2": 3,
   "story5": 1
 }
+```
+
+### Python Usage
+
+**Operational checkpoint:**
+```python
+# Save checkpoint
+filepath = recommender.save_operational_checkpoint()
+
+# Or specify path
+filepath = recommender.save_operational_checkpoint("checkpoints/latest.json")
+```
+
+**Analytical export:**
+```python
+# Full export
+filepath = recommender.export_analytical_state()
+
+# Daily export with date filter
+from datetime import datetime, timedelta
+today = datetime.now().replace(hour=0, minute=0, second=0)
+tomorrow = today + timedelta(days=1)
+
+filepath = recommender.export_analytical_state(
+    filepath=f"exports/daily_{today.strftime('%Y%m%d')}.json",
+    start_date=today,
+    end_date=tomorrow
+)
 ```
 
 ## Testing the Mock Recommender
