@@ -18,21 +18,29 @@ This is a personalized story recommendation system designed for a mobile app tha
 │   Mobile App    │
 │  (1000 users)   │
 └────────┬────────┘
-         │ gRPC events & requests
+         │ App API (HTTP/WebSocket)
          ▼
-┌─────────────────┐        gRPC callbacks        ┌─────────────────┐
-│  Python Service │◄──────────────────────────────│   C# Server     │
-│  (Recommender)  │                               │                 │
-│                 │  GetStoryCatalogue()          │  • CMS (100     │
-│  • User models  ├──────────────────────────────►│    stories)     │
-│  • Algorithms   │                               │  • Event log    │
-│  • Real-time    │  SaveUserModel()              │  • User state   │
-│    computation  ├──────────────────────────────►│    database     │
-│                 │                               │  • Daily export │
-│                 │  LoadUserModel()              │    process      │
-│                 │◄──────────────────────────────┤                 │
-└─────────────────┘                               └─────────────────┘
+┌─────────────────┐        gRPC (bidirectional)   ┌─────────────────┐
+│   C# Server     │◄──────────────────────────────►│  Python Service │
+│                 │                                │  (Recommender)  │
+│  • CMS (100     │  UserReadStory()               │                 │
+│    stories)     ├───────────────────────────────►│  • User models  │
+│  • Event log    │  UserAnsweredQuestion()        │  • Algorithms   │
+│  • User state   │  GetRecommendations()          │  • Real-time    │
+│    database     │                                │    computation  │
+│  • Orchestrates │◄───────────────────────────────┤                 │
+│    all requests │  Recommendations               │                 │
+│                 │                                │                 │
+│                 │  GetStoryCatalogue()           │                 │
+│                 │◄───────────────────────────────┤                 │
+│                 │  SaveUserModel()               │                 │
+│                 │◄───────────────────────────────┤                 │
+│                 │  LoadUserModel()               │                 │
+│                 ├───────────────────────────────►│                 │
+└─────────────────┘                                └─────────────────┘
 ```
+
+**Key principle:** App and C# server are self-contained. Python is a pluggable recommendation engine that C# can call or replace.
 
 ### Data Flow
 
@@ -40,6 +48,7 @@ This is a personalized story recommendation system designed for a mobile app tha
 - Story catalog (CMS with ~100 stories)
 - User interaction event log (all UX events)
 - Persisted user state (saved by Python)
+- App orchestration and business logic
 
 **Python Service is the computation engine** for:
 - Real-time recommendation generation
@@ -59,11 +68,22 @@ C# → Python: Stories from CMS
 
 **2. Runtime (User interactions):**
 ```
-App → Python: UserViewedStory(user_123, story_5)
-App → Python: UserReadStory(user_123, story_5, 100%)
-App → Python: UserAnsweredQuestion(user_123, story_5, response=5, q=1)
-App → Python: GetRecommendations(user_123)
-Python → App: 6 recommendations with methods & scores
+User → App → C# Server: User views story
+C# → Event log: Record event
+C# → Python: UserViewedStory(user_123, story_5)
+
+User → App → C# Server: User completes story
+C# → Event log: Record completion
+C# → Python: UserReadStory(user_123, story_5, 100%)
+
+User → App → C# Server: User answers question
+C# → Event log: Record response
+C# → Python: UserAnsweredQuestion(user_123, story_5, response=5, q=1)
+
+User → App → C# Server: Request recommendations
+C# → Python: GetRecommendations(user_123)
+Python → C#: 6 recommendations with methods & scores
+C# → App → User: Display recommendations
 ```
 
 **3. Background persistence (every 60s):**
@@ -75,73 +95,91 @@ C# saves to database
 **4. Daily analytics export:**
 ```
 C# reads saved UserModel data from its own database
+C# reads event log from its own database
 C# exports to analytics system
 (Python not involved in this step)
 ```
 
-The mobile app sends analytics events via gRPC and receives recommendations. The Python service maintains user profiles and story data in memory, periodically persisting state back to C#.
+The mobile app communicates only with the C# server. The C# server logs all events and orchestrates communication with the Python recommendation service as needed.
 
 ## Sequence Diagram
 
 ```
-User          App                    Recommender Service
- │             │                              │
- │  Opens app  │                              │
- ├────────────>│                              │
- │             │  GetRecommendations()        │
- │             ├─────────────────────────────>│
- │             │                              │
- │             │  6 stories with methods      │
- │             │<─────────────────────────────┤
- │             │                              │
- │ Selects     │                              │
- │ story #3    │                              │
- ├────────────>│                              │
- │             │  UserViewedStory()           │
- │             ├─────────────────────────────>│
- │             │                              │
- │ Reads       │                              │
- │ story       │  (scroll tracking)           │
- │ (scrolls    │                              │
- │  to 87%)    │                              │
- │             │                              │
- │ Finishes    │                              │
- ├────────────>│                              │
- │             │  UserReadStory()             │
- │             │  read_percent=100            │
- │             ├─────────────────────────────>│
- │             │                              │
- │ Shows       │                              │
- │ questions   │                              │
- │             │                              │
- │ Q1: 5/5     │                              │
- │ (connect)   │                              │
- ├────────────>│                              │
- │             │  UserAnsweredQuestion()      │
- │             │  question_num=1, response=5  │
- │             ├─────────────────────────────>│
- │             │                              │
- │ Q2: 4/5     │                              │
- ├────────────>│                              │
- │             │  UserAnsweredQuestion()      │
- │             │  question_num=2, response=4  │
- │             ├─────────────────────────────>│
- │             │                              │
- │ Bookmarks   │                              │
- ├────────────>│                              │
- │             │  UserBookmarkedStory()       │
- │             ├─────────────────────────────>│
- │             │                              │
- │ Requests    │                              │
- │ more recs   │                              │
- ├────────────>│                              │
- │             │  GetRecommendations()        │
- │             ├─────────────────────────────>│
- │             │  (uses connectedness=5       │
- │             │   to find similar stories)   │
- │             │                              │
- │             │  6 new stories               │
- │             │<─────────────────────────────┤
+User          App          C# Server          Python Service
+ │             │                │                      │
+ │  Opens app  │                │                      │
+ ├────────────>│                │                      │
+ │             │  Get recs      │                      │
+ │             ├───────────────>│                      │
+ │             │                │  GetRecommendations()│
+ │             │                ├─────────────────────>│
+ │             │                │                      │
+ │             │                │  6 stories (methods) │
+ │             │                │<─────────────────────┤
+ │             │  Display 6     │                      │
+ │             │<───────────────┤                      │
+ │             │                │                      │
+ │ Selects     │                │                      │
+ │ story #3    │                │                      │
+ ├────────────>│                │                      │
+ │             │  Log event     │                      │
+ │             ├───────────────>│                      │
+ │             │                │  UserViewedStory()   │
+ │             │                ├─────────────────────>│
+ │             │                │                      │
+ │ Reads       │                │                      │
+ │ story       │  (scroll       │                      │
+ │ (scrolls    │   tracking)    │                      │
+ │  to 87%)    │                │                      │
+ │             │                │                      │
+ │ Finishes    │                │                      │
+ ├────────────>│                │                      │
+ │             │  Log complete  │                      │
+ │             ├───────────────>│                      │
+ │             │                │  UserReadStory()     │
+ │             │                │  read_percent=100    │
+ │             │                ├─────────────────────>│
+ │             │                │                      │
+ │ Shows       │                │                      │
+ │ questions   │                │                      │
+ │             │                │                      │
+ │ Q1: 5/5     │                │                      │
+ │ (connect)   │                │                      │
+ ├────────────>│                │                      │
+ │             │  Log response  │                      │
+ │             ├───────────────>│                      │
+ │             │                │  UserAnsweredQuestion()│
+ │             │                │  q=1, response=5     │
+ │             │                ├─────────────────────>│
+ │             │                │                      │
+ │ Q2: 4/5     │                │                      │
+ ├────────────>│                │                      │
+ │             │  Log response  │                      │
+ │             ├───────────────>│                      │
+ │             │                │  UserAnsweredQuestion()│
+ │             │                │  q=2, response=4     │
+ │             │                ├─────────────────────>│
+ │             │                │                      │
+ │ Bookmarks   │                │                      │
+ ├────────────>│                │                      │
+ │             │  Log bookmark  │                      │
+ │             ├───────────────>│                      │
+ │             │                │  UserBookmarkedStory()│
+ │             │                ├─────────────────────>│
+ │             │                │                      │
+ │ Requests    │                │                      │
+ │ more recs   │                │                      │
+ ├────────────>│                │                      │
+ │             │  Get recs      │                      │
+ │             ├───────────────>│                      │
+ │             │                │  GetRecommendations()│
+ │             │                │  (uses connect=5)    │
+ │             │                ├─────────────────────>│
+ │             │                │                      │
+ │             │                │  6 new stories       │
+ │             │                │<─────────────────────┤
+ │             │  Display       │                      │
+ │             │<───────────────┤                      │
 ```
 
 ## gRPC Interface Definition

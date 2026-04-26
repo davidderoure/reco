@@ -2,9 +2,18 @@
 
 ## Architecture Overview
 
-**Bidirectional gRPC:**
-- **Python as SERVER**: C# app sends events and requests recommendations
-- **Python as CLIENT**: Python calls C# to get catalog and save/load state
+**Three-tier architecture:**
+```
+Mobile App ←→ C# Server ←→ Python Service
+(UI/UX)       (orchestration,  (recommendation
+               data storage)    computation)
+```
+
+**App and C# are self-contained** - the system works without Python (just no recommendations)
+
+**Bidirectional gRPC between C# and Python:**
+- **C# → Python**: Forward events, request recommendations
+- **Python → C#**: Get catalog, save/load state
 
 **Data ownership:**
 - **C# server**: Source of truth (CMS stories, event log, saved user state)
@@ -13,10 +22,13 @@
 **Flow:**
 1. Python loads user state from C# at startup (`LoadUserModel`)
 2. Python fetches story catalog from C# CMS (`GetStoryCatalogue`)
-3. C# app sends events to Python (`UserReadStory`, etc.)
-4. Python updates models in memory and returns recommendations
-5. Python saves state back to C# every 60s (`SaveUserModel`)
-6. Daily exports: C# reads its own saved state (Python not involved)
+3. App sends events to C# server (HTTP/WebSocket)
+4. C# logs events, then forwards to Python (`UserReadStory`, etc.)
+5. C# requests recommendations from Python when needed
+6. Python updates models in memory and returns recommendations to C#
+7. C# sends recommendations back to app
+8. Python saves state back to C# every 60s (`SaveUserModel`)
+9. Daily exports: C# reads its own saved state (Python not involved)
 
 ---
 
