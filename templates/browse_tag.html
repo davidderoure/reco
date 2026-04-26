@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div style="margin-bottom: 20px;">
+    <a href="{{ url_for('index') }}" class="btn btn-secondary">← Back to Home</a>
+</div>
+
+<h2>Stories tagged: <span class="tag" style="font-size: 1em;">{{ tag }}</span></h2>
+
+{% if stories %}
+    <p style="color: #666; margin-bottom: 20px;">
+        Found {{ stories|length }} stories with this tag:
+    </p>
+    
+    {% for story in stories %}
+    <div class="card story-card" onclick="window.location.href='{{ url_for('view_story', story_id=story.id) }}'">
+        <h3 style="margin-top: 0;">{{ story.title }}</h3>
+        <div class="tag-list">
+            {% for story_tag in story.tags %}
+                <span class="tag">{{ story_tag }}</span>
+            {% endfor %}
+        </div>
+        <p style="margin-top: 10px; color: #667eea; font-weight: 600;">
+            Click to read this story →
+        </p>
+    </div>
+    {% endfor %}
+{% else %}
+    <div class="alert alert-info">
+        <p>No stories found with this tag.</p>
+    </div>
+{% endif %}
+{% endblock %}

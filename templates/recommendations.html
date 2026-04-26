@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h2>📖 Recommended Stories for You</h2>
+
+{% if recommendations %}
+    <p style="color: #666; margin-bottom: 20px;">
+        Based on your reading history and preferences, here are stories we think you'll enjoy:
+    </p>
+    
+    {% for rec in recommendations %}
+    <div class="card" style="position: relative;">
+        <!-- Bookmark button in corner -->
+        <form method="POST" action="{{ url_for('bookmark_story', story_id=rec.id) }}" 
+              style="position: absolute; top: 15px; right: 15px;">
+            <button type="submit" class="btn" 
+                    style="background: transparent; color: #ffc107; padding: 5px 10px; font-size: 1.3em; border: 2px solid #ffc107;"
+                    title="Bookmark this story">
+                🔖
+            </button>
+        </form>
+        
+        <div onclick="window.location.href='{{ url_for('view_story', story_id=rec.id) }}'" 
+             style="cursor: pointer; padding-right: 60px;">
+            <h3 style="margin-top: 0;">
+                {{ rec.title }}
+                <span class="method-badge">{{ rec.method }}</span>
+            </h3>
+            <div class="tag-list">
+                {% for tag in rec.tags %}
+                    <span class="tag">{{ tag }}</span>
+                {% endfor %}
+            </div>
+            
+            <div style="display: flex; gap: 15px; align-items: center; margin: 10px 0;">
+                <span class="score-badge">Slot: {{ rec.slot_position + 1 }}</span>
+                
+                {% if rec.avg_connectedness %}
+                <span style="color: {% if rec.avg_connectedness >= 4 %}#28a745{% else %}#6c757d{% endif %}; font-weight: 600;">
+                    Avg Connection: {{ "%.1f"|format(rec.avg_connectedness) }}/5
+                </span>
+                {% endif %}
+            </div>
+            
+            {% if rec.reasons %}
+            <ul class="reason-list">
+                {% for reason in rec.reasons %}
+                <li>{{ reason }}</li>
+                {% endfor %}
+            </ul>
+            {% endif %}
+            
+            <p style="margin-top: 10px; color: #667eea; font-weight: 600;">
+                Click to read this story →
+            </p>
+        </div>
+    </div>
+    {% endfor %}
+{% else %}
+    <div class="alert alert-info">
+        <p>No recommendations yet! Start reading some stories and we'll learn your preferences.</p>
+        <a href="{{ url_for('index') }}" class="btn" style="margin-top: 10px;">Browse Stories</a>
+    </div>
+{% endif %}
+
+<div style="margin-top: 30px;">
+    <a href="{{ url_for('index') }}" class="btn btn-secondary">← Back to Home</a>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    // Prevent card click when clicking bookmark button
+    document.querySelectorAll('form').forEach(form => {
+        form.addEventListener('click', function(e) {
+            e.stopPropagation();
+        });
+        
+        form.addEventListener('submit', function(e) {
+            e.stopPropagation();
+            const button = this.querySelector('button');
+            if (button) {
+                button.innerHTML = '✓';
+                button.style.background = '#28a745';
+                button.style.color = 'white';
+                button.style.borderColor = '#28a745';
+            }
+        });
+    });
+</script>
+{% endblock %}

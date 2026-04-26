@@ -1,0 +1,98 @@
+STORY RECOMMENDER V2 - PROJECT FILES CREATED
+=============================================
+
+Complete redesign from mood-based to tag-based architecture with gRPC interface.
+
+FILES CREATED:
+--------------
+
+Core Python:
+1. recommender.py (37KB) - Complete recommendation system
+   - Tag-based story structure
+   - Configurable recommendation slots
+   - Ignore decay mechanism
+   - Sequence tracking with StoryTransition
+   - State export with date filtering
+
+2. app.py (20KB) - Flask demo application
+   - Tag browsing interface
+   - Story progress tracking (scroll-based)
+   - 4-question feedback flow
+   - Bookmark functionality
+   - Method performance insights
+
+Documentation:
+3. README.md (15KB) - Comprehensive technical documentation
+   - gRPC interface definition (recommender.proto)
+   - Sequence diagrams
+   - Event types and structure
+   - Mock recommender implementation guide
+   - Configuration parameters
+   - Questions for team discussion
+
+Templates (7 files):
+4. templates/base.html - Main layout with navigation
+5. templates/index.html - Home with tag browsing
+6. templates/browse_tag.html - Stories filtered by tag
+7. templates/recommendations.html - 6 recommendations with methods
+8. templates/story.html - Story reader with scroll tracking
+9. templates/story_questions.html - 4 questions + bookmark
+10. templates/insights.html - Method performance dashboard
+
+KEY CHANGES FROM V1:
+--------------------
+✓ Removed mood tracking (will be used for evaluation only)
+✓ Changed from single theme to multiple tags per story
+✓ Added question_response events (Q1 connectedness is compulsory)
+✓ Added story_progress event (completion percentage 0-100)
+✓ Changed favorites to bookmarks (moderate preference signal)
+✓ Implemented ignore decay for repeatedly skipped stories
+✓ Added configurable recommendation slots (2-2-1-1 default)
+✓ Added recommendation provenance (method + slot position)
+✓ Updated all 25 Oxford stories with tag-based organization
+✓ Added state export with date filtering
+✓ Created gRPC interface for C# mobile app
+
+NEXT STEPS:
+-----------
+1. Download these files from /home/claude/reco-v2/
+2. Clone your existing repo: git clone https://github.com/davidderoure/reco.git
+3. Tag current version: git tag v1-mood-based
+4. Create new branch: git checkout -b v2-tag-based-grpc
+5. Copy files into repo
+6. Commit and push
+7. Team discussion tomorrow on design decisions
+8. C# team builds mock gRPC service for testing
+9. Final integration after approval
+
+DIRECTORY STRUCTURE:
+--------------------
+reco-v2/
+├── recommender.py
+├── app.py
+├── README.md
+├── PROJECT_SUMMARY.txt (this file)
+└── templates/
+    ├── base.html
+    ├── index.html
+    ├── browse_tag.html
+    ├── recommendations.html
+    ├── story.html
+    ├── story_questions.html
+    └── insights.html
+
+TEST THE DEMO:
+--------------
+cd /home/claude/reco-v2
+python app.py
+# Visit http://localhost:5000
+
+QUESTIONS FOR TOMORROW'S DISCUSSION:
+-------------------------------------
+1. Recommendation slot allocation (2-2-1-1 optimal?)
+2. Ignore decay parameters (threshold=3, rate=20% appropriate?)
+3. Wildcard strategy (implement serendipity or keep random?)
+4. State export frequency (daily sufficient?)
+5. Question 1 non-response handling (treat as neutral?)
+6. Tag stability (how often will new tags be added?)
+7. Sequence window (24 hours correct for story pairs?)

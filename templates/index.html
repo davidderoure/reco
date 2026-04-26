@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h2>Welcome! 👋</h2>
+
+<div class="stats">
+    <div class="stat-box">
+        <div class="stat-number">{{ stats.stories_read }}</div>
+        <div class="stat-label">Stories Viewed</div>
+    </div>
+    <div class="stat-box">
+        <div class="stat-number">{{ stats.stories_completed }}</div>
+        <div class="stat-label">Stories Completed</div>
+    </div>
+    <div class="stat-box">
+        <div class="stat-number">{{ stats.bookmarks }}</div>
+        <div class="stat-label">Bookmarked</div>
+    </div>
+</div>
+
+{% if stats.last_completed %}
+<div class="alert alert-info">
+    Last completed: <strong>{{ stats.last_completed }}</strong>
+</div>
+{% endif %}
+
+<h3>Browse by Tag</h3>
+<p style="color: #666; margin-bottom: 10px;">
+    Click on a tag to see all stories with that theme:
+</p>
+<div class="tag-list">
+    {% for tag in all_tags %}
+        <a href="{{ url_for('browse_tag', tag=tag) }}" class="tag">{{ tag }}</a>
+    {% endfor %}
+</div>
+
+<div style="margin-top: 30px;">
+    <a href="{{ url_for('recommendations') }}" class="btn" style="font-size: 1.2em;">
+        🎯 Get Personalized Recommendations
+    </a>
+</div>
+
+<div style="margin-top: 20px; padding: 15px; background: #f8f9fa; border-radius: 10px;">
+    <p style="color: #666; font-size: 0.95em;">
+        <strong>Demo User ID:</strong> {{ user_id }}<br>
+        <small>This demo tracks your interactions to provide personalized recommendations. 
+        Click "Reset Demo" in the navigation to start fresh.</small>
+    </p>
+</div>
+{% endblock %}

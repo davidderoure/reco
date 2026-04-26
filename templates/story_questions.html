@@ -1,0 +1,136 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div style="text-align: center; margin-bottom: 30px;">
+    <h2 style="color: #28a745;">✓ Story Completed!</h2>
+    <h3 style="color: #667eea; margin-top: 10px;">{{ story.title }}</h3>
+</div>
+
+<div class="card" style="background: linear-gradient(135deg, #667eea15 0%, #764ba215 100%); border: none;">
+    <h3 style="margin-top: 0;">Quick Feedback</h3>
+    <p style="color: #666;">Help us recommend better stories by answering these questions.</p>
+</div>
+
+<!-- Question 1: Connectedness (COMPULSORY) -->
+<div class="card">
+    <h3 style="margin-top: 0;">1. How connected did you feel to this story? ⭐ (Required)</h3>
+    <p style="color: #666; margin-bottom: 15px;">
+        Did this story resonate with you? Did it feel meaningful or relevant?
+    </p>
+    
+    <form method="POST" action="{{ url_for('submit_question', story_id=story.id) }}" id="question1Form">
+        <input type="hidden" name="question_number" value="1">
+        <div class="connectedness-selector">
+            <button type="submit" name="response" value="1" class="connectedness-btn" title="Not at all connected (1)">1️⃣</button>
+            <button type="submit" name="response" value="2" class="connectedness-btn" title="Slightly connected (2)">2️⃣</button>
+            <button type="submit" name="response" value="3" class="connectedness-btn" title="Moderately connected (3)">3️⃣</button>
+            <button type="submit" name="response" value="4" class="connectedness-btn" title="Very connected (4)">4️⃣</button>
+            <button type="submit" name="response" value="5" class="connectedness-btn" title="Deeply connected (5)">5️⃣</button>
+        </div>
+    </form>
+    
+    <p style="text-align: center; color: #999; font-size: 0.9em; margin-top: 10px;">
+        1 = Not at all • 5 = Deeply connected
+    </p>
+</div>
+
+<!-- Question 2: Emotional Impact (OPTIONAL) -->
+<div class="card">
+    <h3 style="margin-top: 0;">2. How emotionally impactful was this story? (Optional)</h3>
+    
+    <form method="POST" action="{{ url_for('submit_question', story_id=story.id) }}">
+        <input type="hidden" name="question_number" value="2">
+        <div class="connectedness-selector">
+            <button type="submit" name="response" value="1" class="connectedness-btn">1️⃣</button>
+            <button type="submit" name="response" value="2" class="connectedness-btn">2️⃣</button>
+            <button type="submit" name="response" value="3" class="connectedness-btn">3️⃣</button>
+            <button type="submit" name="response" value="4" class="connectedness-btn">4️⃣</button>
+            <button type="submit" name="response" value="5" class="connectedness-btn">5️⃣</button>
+        </div>
+    </form>
+</div>
+
+<!-- Question 3: Would Recommend (OPTIONAL) -->
+<div class="card">
+    <h3 style="margin-top: 0;">3. Would you recommend this story to others? (Optional)</h3>
+    
+    <form method="POST" action="{{ url_for('submit_question', story_id=story.id) }}">
+        <input type="hidden" name="question_number" value="3">
+        <div class="connectedness-selector">
+            <button type="submit" name="response" value="1" class="connectedness-btn">1️⃣</button>
+            <button type="submit" name="response" value="2" class="connectedness-btn">2️⃣</button>
+            <button type="submit" name="response" value="3" class="connectedness-btn">3️⃣</button>
+            <button type="submit" name="response" value="4" class="connectedness-btn">4️⃣</button>
+            <button type="submit" name="response" value="5" class="connectedness-btn">5️⃣</button>
+        </div>
+    </form>
+</div>
+
+<!-- Question 4: Thought-Provoking (OPTIONAL) -->
+<div class="card">
+    <h3 style="margin-top: 0;">4. How thought-provoking was this story? (Optional)</h3>
+    
+    <form method="POST" action="{{ url_for('submit_question', story_id=story.id) }}">
+        <input type="hidden" name="question_number" value="4">
+        <div class="connectedness-selector">
+            <button type="submit" name="response" value="1" class="connectedness-btn">1️⃣</button>
+            <button type="submit" name="response" value="2" class="connectedness-btn">2️⃣</button>
+            <button type="submit" name="response" value="3" class="connectedness-btn">3️⃣</button>
+            <button type="submit" name="response" value="4" class="connectedness-btn">4️⃣</button>
+            <button type="submit" name="response" value="5" class="connectedness-btn">5️⃣</button>
+        </div>
+    </form>
+</div>
+
+<!-- Bookmark Section -->
+<div class="card">
+    <h3 style="margin-top: 0;">🔖 Want to revisit this story later?</h3>
+    
+    {% if already_bookmarked %}
+        <div class="alert alert-success">
+            <strong>✓ You've already bookmarked this story!</strong>
+        </div>
+    {% else %}
+        <form method="POST" action="{{ url_for('bookmark_story', story_id=story.id) }}" style="margin-top: 15px;">
+            <button type="submit" class="btn" style="background: #ffc107; color: #333; font-size: 1.1em;">
+                🔖 Bookmark This Story
+            </button>
+        </form>
+        <p style="color: #666; margin-top: 10px; font-size: 0.9em;">
+            Bookmarked stories are saved for easy access later.
+        </p>
+    {% endif %}
+</div>
+
+<!-- Navigation -->
+<div style="margin-top: 30px; text-align: center; padding-top: 20px; border-top: 2px solid #eee;">
+    <h3>What would you like to do next?</h3>
+    <div style="display: flex; gap: 15px; justify-content: center; flex-wrap: wrap; margin-top: 20px;">
+        <a href="{{ url_for('recommendations') }}" class="btn" style="font-size: 1.1em;">
+            📖 Get More Recommendations
+        </a>
+        <a href="{{ url_for('index') }}" class="btn btn-secondary">
+            🏠 Back to Home
+        </a>
+        <a href="{{ url_for('insights') }}" class="btn btn-secondary">
+            📊 View Insights
+        </a>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    // Show confirmation when questions are answered
+    document.querySelectorAll('form').forEach(form => {
+        form.addEventListener('submit', function(e) {
+            const button = e.submitter;
+            if (button) {
+                button.style.opacity = '0.6';
+                button.innerHTML = button.innerHTML + ' ✓';
+            }
+        });
+    });
+</script>
+{% endblock %}

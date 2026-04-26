@@ -1,0 +1,187 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h2>📊 Insights & Patterns</h2>
+
+{% if user_data %}
+<h3>Your Reading Journey</h3>
+
+<div class="card">
+    <h4>Recommendation Method Performance</h4>
+    <p style="color: #666; margin-bottom: 15px;">
+        How often you selected stories from each recommendation method:
+    </p>
+    <table>
+        <thead>
+            <tr>
+                <th>Method</th>
+                <th>Times Shown</th>
+                <th>Times Selected</th>
+                <th>Selection Rate</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for method, count in user_data.method_counts.items() %}
+            <tr>
+                <td><span class="method-badge">{{ method }}</span></td>
+                <td>{{ count }}</td>
+                <td>{{ user_data.method_selected_counts.get(method, 0) }}</td>
+                <td>
+                    {% if count > 0 %}
+                        {{ "%.1f"|format((user_data.method_selected_counts.get(method, 0) / count) * 100) }}%
+                    {% else %}
+                        0%
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<div class="card">
+    <h4>Tag Preferences (Top 10)</h4>
+    <table>
+        <thead>
+            <tr>
+                <th>Tag</th>
+                <th>Preference Score</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for tag, score in user_data.tag_scores %}
+            <tr>
+                <td><span class="tag">{{ tag }}</span></td>
+                <td>{{ "%.2f"|format(score) }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+{% if user_data.sequences %}
+<div class="card">
+    <h4>Your Story Sequences (Last 10)</h4>
+    <table>
+        <thead>
+            <tr>
+                <th>From Story</th>
+                <th>To Story</th>
+                <th>Connectedness Change</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for seq in user_data.sequences %}
+            <tr>
+                <td>{{ seq.from }}</td>
+                <td>{{ seq.to }}</td>
+                <td>
+                    {% if seq.connectedness_delta %}
+                        <strong style="color: {% if seq.connectedness_delta > 0 %}#28a745{% else %}#dc3545{% endif %}">
+                            {{ "%+.2f"|format(seq.connectedness_delta) }}
+                        </strong>
+                    {% else %}
+                        N/A
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
+{% if user_data.question_responses %}
+<div class="card">
+    <h4>Recent Question Responses (Last 20)</h4>
+    <table>
+        <thead>
+            <tr>
+                <th>Story ID</th>
+                <th>Question</th>
+                <th>Response</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for story_id, qnum, resp, ts in user_data.question_responses|reverse %}
+            <tr>
+                <td>{{ story_id }}</td>
+                <td>Q{{ qnum }}{% if qnum == 1 %} (Connectedness){% endif %}</td>
+                <td><strong>{{ resp }}/5</strong></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
+{% if user_data.ignore_counts %}
+<div class="card">
+    <h4>Story Ignore Counts</h4>
+    <p style="color: #666; margin-bottom: 15px;">
+        Stories that have been recommended but not selected (higher count = may appear less often):
+    </p>
+    <table>
+        <thead>
+            <tr>
+                <th>Story ID</th>
+                <th>Times Ignored</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for story_id, count in user_data.ignore_counts.items() %}
+            {% if count > 0 %}
+            <tr>
+                <td>{{ story_id }}</td>
+                <td>{{ count }}</td>
+            </tr>
+            {% endif %}
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+{% endif %}
+
+<h3>Global Story Patterns</h3>
+
+{% for story_title, data in insights.global_transitions.items() %}
+    {% if data.best_next %}
+    <div class="card">
+        <h4>After "{{ story_title }}"</h4>
+        
+        {% if data.best_next %}
+        <p><strong>Best next stories:</strong></p>
+        <ul>
+            {% for next_title, avg_connectedness in data.best_next %}
+            <li>
+                {{ next_title }} 
+                <span style="color: {% if avg_connectedness >= 4 %}#28a745{% else %}#6c757d{% endif %}">
+                    (avg connectedness: {{ "%.2f"|format(avg_connectedness) }}/5)
+                </span>
+            </li>
+            {% endfor %}
+        </ul>
+        {% endif %}
+        
+        {% if data.best_next_tags %}
+        <p><strong>Best next tags:</strong></p>
+        <ul>
+            {% for tag, avg_connectedness in data.best_next_tags.items() %}
+            <li>
+                <span class="tag">{{ tag }}</span>
+                <span style="color: {% if avg_connectedness >= 4 %}#28a745{% else %}#6c757d{% endif %}">
+                    (avg: {{ "%.2f"|format(avg_connectedness) }}/5)
+                </span>
+            </li>
+            {% endfor %}
+        </ul>
+        {% endif %}
+    </div>
+    {% endif %}
+{% endfor %}
+
+<div style="margin-top: 30px;">
+    <a href="{{ url_for('index') }}" class="btn btn-secondary">← Back to Home</a>
+</div>
+{% endblock %}

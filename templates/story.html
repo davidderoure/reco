@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div style="margin-bottom: 20px;">
+    <a href="{{ url_for('recommendations') }}" class="btn btn-secondary">← Back to Recommendations</a>
+</div>
+
+<h2>{{ story.title }}</h2>
+
+<div class="tag-list">
+    {% for tag in story.tags %}
+        <a href="{{ url_for('browse_tag', tag=tag) }}" class="tag">{{ tag }}</a>
+    {% endfor %}
+</div>
+
+<div class="story-content" id="storyContent">
+    {{ content }}
+</div>
+
+<div id="progressIndicator" style="margin: 20px 0; padding: 15px; background: #f8f9fa; border-radius: 10px;">
+    <p style="color: #666;">
+        Reading progress: <strong id="progressText">0%</strong>
+    </p>
+</div>
+
+{% if already_completed %}
+<div class="alert alert-success">
+    ✓ You've already completed this story!
+</div>
+<a href="{{ url_for('recommendations') }}" class="btn">
+    Find More Stories →
+</a>
+{% else %}
+<div style="margin-top: 30px; padding-top: 20px; border-top: 2px solid #eee;">
+    <h3>Finished reading?</h3>
+    <form method="POST" action="{{ url_for('story_progress', story_id=story.id) }}" id="completionForm">
+        <input type="hidden" name="completion_percentage" id="completionPercentage" value="0">
+        <button type="submit" class="btn btn-success" style="font-size: 1.1em;" onclick="setCompletion(100)">
+            ✓ I've Finished This Story
+        </button>
+    </form>
+    <p style="color: #666; margin-top: 10px; font-size: 0.9em;">
+        After completing, you'll be asked a few quick questions.
+    </p>
+</div>
+{% endif %}
+
+<form method="POST" action="{{ url_for('bookmark_story', story_id=story.id) }}" style="margin-top: 15px;">
+    <button type="submit" class="btn" style="background: #ffc107; color: #333;">
+        🔖 Bookmark This Story
+    </button>
+</form>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    // Track scroll progress
+    let maxScroll = 0;
+    
+    function updateProgress() {
+        const content = document.getElementById('storyContent');
+        const contentRect = content.getBoundingClientRect();
+        const contentHeight = content.scrollHeight;
+        const viewportHeight = window.innerHeight;
+        const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+        
+        // Calculate how much of the content has been scrolled through
+        const contentTop = content.offsetTop;
+        const scrolledPast = Math.max(0, scrollTop + viewportHeight - contentTop);
+        const percentage = Math.min(100, Math.floor((scrolledPast / contentHeight) * 100));
+        
+        // Track maximum scroll
+        maxScroll = Math.max(maxScroll, percentage);
+        
+        // Update display
+        document.getElementById('progressText').textContent = maxScroll + '%';
+        document.getElementById('completionPercentage').value = maxScroll;
+    }
+    
+    function setCompletion(pct) {
+        document.getElementById('completionPercentage').value = pct;
+    }
+    
+    // Update progress on scroll
+    window.addEventListener('scroll', updateProgress);
+    window.addEventListener('resize', updateProgress);
+    updateProgress();
+    
+    // When user leaves the page, submit progress
+    window.addEventListener('beforeunload', function() {
+        if (maxScroll < 100 && maxScroll > 0) {
+            // Send progress data
+            const form = document.getElementById('completionForm');
+            const formData = new FormData(form);
+            navigator.sendBeacon(form.action, formData);
+        }
+    });
+</script>
+{% endblock %}
