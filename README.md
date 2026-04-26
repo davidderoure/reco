@@ -16,21 +16,70 @@ This is a personalized story recommendation system designed for a mobile app tha
 ```
 ┌─────────────────┐
 │   Mobile App    │
-│    (C#/MAUI)    │
+│  (1000 users)   │
 └────────┬────────┘
-         │ gRPC
+         │ gRPC events & requests
          ▼
-┌─────────────────┐
-│  Python Service │
-│  (Recommender)  │
-│                 │
-│  • Events       │
-│  • State        │
-│  • Algorithms   │
-└─────────────────┘
+┌─────────────────┐        gRPC callbacks        ┌─────────────────┐
+│  Python Service │◄──────────────────────────────│   C# Server     │
+│  (Recommender)  │                               │                 │
+│                 │  GetStoryCatalogue()          │  • CMS (100     │
+│  • User models  ├──────────────────────────────►│    stories)     │
+│  • Algorithms   │                               │  • Event log    │
+│  • Real-time    │  SaveUserModel()              │  • User state   │
+│    computation  ├──────────────────────────────►│    database     │
+│                 │                               │  • Daily export │
+│                 │  LoadUserModel()              │    process      │
+│                 │◄──────────────────────────────┤                 │
+└─────────────────┘                               └─────────────────┘
 ```
 
-The mobile app sends analytics events via gRPC and receives recommendations. The Python service maintains user profiles and story data, updating recommendations based on user interactions.
+### Data Flow
+
+**C# Server is the source of truth** for:
+- Story catalog (CMS with ~100 stories)
+- User interaction event log (all UX events)
+- Persisted user state (saved by Python)
+
+**Python Service is the computation engine** for:
+- Real-time recommendation generation
+- User preference model updates
+- Collaborative filtering
+- Sequence analysis
+
+### Information Flow
+
+**1. Startup:**
+```
+Python → C#: LoadUserModel([all users])
+C# → Python: UserModelMessage[] (saved state from database)
+Python → C#: GetStoryCatalogue()
+C# → Python: Stories from CMS
+```
+
+**2. Runtime (User interactions):**
+```
+App → Python: UserViewedStory(user_123, story_5)
+App → Python: UserReadStory(user_123, story_5, 100%)
+App → Python: UserAnsweredQuestion(user_123, story_5, response=5, q=1)
+App → Python: GetRecommendations(user_123)
+Python → App: 6 recommendations with methods & scores
+```
+
+**3. Background persistence (every 60s):**
+```
+Python → C#: SaveUserModel([all active users])
+C# saves to database
+```
+
+**4. Daily analytics export:**
+```
+C# reads saved UserModel data from its own database
+C# exports to analytics system
+(Python not involved in this step)
+```
+
+The mobile app sends analytics events via gRPC and receives recommendations. The Python service maintains user profiles and story data in memory, periodically persisting state back to C#.
 
 ## Sequence Diagram
 
@@ -97,6 +146,10 @@ User          App                    Recommender Service
 
 ## gRPC Interface Definition
 
+**Architecture:** Python is both a gRPC server AND client:
+- **Python as SERVER**: C# app calls Python to send events and get recommendations
+- **Python as CLIENT**: Python calls C# to fetch stories and save/load state
+
 **recommender.proto:**
 
 ```protobuf
@@ -107,20 +160,33 @@ package recommender;
 import "google/protobuf/timestamp.proto";
 import "google/protobuf/empty.proto";
 
-// Main service interface
+// ===== SERVICE 1: Python as gRPC SERVER =====
+// C# app calls these methods on Python
+
 service StoryRecommender {
-  // Fire-and-forget event notifications
+  // Fire-and-forget event notifications (C# → Python)
   rpc UserAnsweredQuestion(UserAnsweredQuestionRequest) returns (google.protobuf.Empty);
   rpc UserReadStory(UserReadStoryRequest) returns (google.protobuf.Empty);
   rpc UserBookmarkedStory(UserBookmarkedStoryRequest) returns (google.protobuf.Empty);
   rpc UserViewedStory(UserViewedStoryRequest) returns (google.protobuf.Empty);
   rpc UserSearchedTag(UserSearchedTagRequest) returns (google.protobuf.Empty);
   
-  // Request/response: returns recommendations
+  // Request/response: returns recommendations (C# → Python)
   rpc GetRecommendations(GetRecommendationsRequest) returns (GetRecommendationsResponse);
+}
+
+// ===== SERVICE 2: Python as gRPC CLIENT =====
+// Python calls these methods on C# server
+
+service StoryService {
+  // Fetch story catalog from CMS (Python → C#)
+  rpc GetStoryCatalogue(GetStoryCatalogueRequest) returns (GetStoryCatalogueResponse);
   
-  // Load story metadata (called at startup or when stories are added)
-  rpc LoadStories(StoryBatch) returns (LoadResponse);
+  // Save user models to C# database (Python → C#)
+  rpc SaveUserModel(SaveUserModelRequest) returns (google.protobuf.Empty);
+  
+  // Load user models from C# database (Python → C#)
+  rpc LoadUserModel(LoadUserModelRequest) returns (LoadUserModelResponse);
 }
 
 // ===== EVENT MESSAGES (Fire-and-forget) =====
@@ -186,10 +252,10 @@ message Recommendation {
   float avg_connectedness = 7;  // Average connectedness score (1-5), optional
 }
 
-// ===== STORY LOADING =====
+// ===== STORY CATALOG MESSAGES (Python → C#) =====
 
-message StoryBatch {
-  repeated Story stories = 1;
+message GetStoryCatalogueRequest {
+  // Empty: always returns full catalog
 }
 
 message Story {
@@ -198,11 +264,45 @@ message Story {
   repeated string tags = 3;
 }
 
-message LoadResponse {
-  bool success = 1;
-  int32 stories_loaded = 2;
-  repeated string available_tags = 3;
+message GetStoryCatalogueResponse {
+  repeated Story stories = 1;
 }
+
+// ===== STATE PERSISTENCE MESSAGES (Python ↔ C#) =====
+
+message UserModelMessage {
+  string user_id = 1;
+  
+  // User history
+  repeated string viewed_story_ids = 2;
+  map<string, int32> story_progress = 3;  // story_id → read_percent
+  repeated string bookmarked_story_ids = 4;
+  
+  // Preferences
+  map<string, float> tag_weights = 5;  // tag → accumulated score
+  map<string, int32> story_connectedness = 6;  // story_id → connectedness (1-5)
+  
+  // Recommendation tracking
+  repeated string last_recommendations = 7;  // For slot stability
+  map<string, int32> story_ignore_count = 8;  // story_id → times shown but not selected
+  
+  // Last completed story (for sequences)
+  string last_completed_story = 9;
+  google.protobuf.Timestamp last_completed_timestamp = 10;
+}
+
+message SaveUserModelRequest {
+  repeated UserModelMessage user_models = 1;
+}
+
+message LoadUserModelRequest {
+  repeated string user_ids = 1;  // Empty array = load all users
+}
+
+message LoadUserModelResponse {
+  repeated UserModelMessage user_models = 1;
+}
+```
 ```
 
 ## Event Types
@@ -402,16 +502,39 @@ Story(
 
 ## State Management
 
+**Production Architecture:**
+- Python calls `SaveUserModel()` on C# server every 60 seconds (via gRPC)
+- Python calls `LoadUserModel()` on C# server at startup (via gRPC)
+- C# server stores user models in its database
+- Daily exports run on C# server, reading from its own database (Python not involved)
+
+**Demo/Testing Architecture (HTTP endpoints documented below):**
+- For standalone testing without C# server
+- For debugging and development
+- HTTP endpoints provide similar functionality for local testing
+
+---
+
 The system provides **two modes** of state persistence for different purposes:
 
 ### 1. Operational Checkpoints (Fault Tolerance)
 
 **Purpose:** Keep service running after restarts, enable collaborative filtering  
-**Frequency:** Every few minutes  
+**Frequency:** Every few minutes (60s in production via gRPC SaveUserModel)  
 **Contents:** User profiles + story catalog (lightweight)  
 **Format:** Optimized for fast loading
 
-**HTTP Endpoint:**
+**In Production (gRPC):**
+```protobuf
+// Python → C# every 60 seconds
+rpc SaveUserModel(SaveUserModelRequest) returns (Empty);
+
+message SaveUserModelRequest {
+  repeated UserModelMessage user_models = 1;
+}
+```
+
+**For Demo/Testing (HTTP):**
 ```python
 GET /checkpoint
 ```
@@ -457,7 +580,17 @@ schedule.every(5).minutes.do(save_checkpoint)
 **Contents:** Everything including recommendation provenance, sequences, events  
 **Format:** Pretty-printed JSON for readability
 
-**Full Analytical Export:**
+**In Production:**
+- C# server reads saved UserModel data from its own database
+- C# exports to analytics system independently
+- Python's analytical data (events, sequences, provenance) is optional and only for deep debugging
+
+**For Demo/Testing (HTTP endpoints below):**
+- Python can export its full internal state
+- Useful for understanding algorithm behavior
+- Not used in production data pipeline
+
+**Full Analytical Export (Demo):**
 ```python
 GET /export_state
 ```

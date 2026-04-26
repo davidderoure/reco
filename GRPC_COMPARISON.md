@@ -1,5 +1,25 @@
 # gRPC Interface Comparison: V1 (main) vs V2 (tag-based-grpc)
 
+## Architecture Overview
+
+**Bidirectional gRPC:**
+- **Python as SERVER**: C# app sends events and requests recommendations
+- **Python as CLIENT**: Python calls C# to get catalog and save/load state
+
+**Data ownership:**
+- **C# server**: Source of truth (CMS stories, event log, saved user state)
+- **Python service**: Computation engine (real-time recommendations, in-memory models)
+
+**Flow:**
+1. Python loads user state from C# at startup (`LoadUserModel`)
+2. Python fetches story catalog from C# CMS (`GetStoryCatalogue`)
+3. C# app sends events to Python (`UserReadStory`, etc.)
+4. Python updates models in memory and returns recommendations
+5. Python saves state back to C# every 60s (`SaveUserModel`)
+6. Daily exports: C# reads its own saved state (Python not involved)
+
+---
+
 ## Executive Summary
 
 **Good news:** The core structure is similar! The changes are primarily:
